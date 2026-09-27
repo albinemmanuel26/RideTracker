@@ -55,21 +55,19 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Future<void> _onManualCheckIn() async {
     if (_isProcessing) return;
 
-    // Capture result as a record {riderId, category}
-    final result = await showDialog<({String riderId, String category})>(
+    final result = await showDialog<String>(
       context: context,
       builder: (ctx) => _ManualCheckInDialog(),
     );
 
     if (!mounted || result == null) return;
-    await _processManualEntry(riderId: result.riderId, selectedCategory: result.category);
+    await _processManualEntry(riderId: result);
   }
 
   // ── Manual Entry Processing ────────────────────────────────────────────────
 
   Future<void> _processManualEntry({
     required String riderId,
-    required String selectedCategory,
   }) async {
     if (_isProcessing) return;
     setState(() => _isProcessing = true);
@@ -87,14 +85,16 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
     String? verifyError;
     String? verifiedName;
-    String verifiedCategory = selectedCategory;
+    String verifiedCategory = '';
     try {
       final data = await ApiService.verifyRider(
         riderId: riderId,
-        category: selectedCategory,
       );
       verifiedName = data['rider_name']?.toString();
-      verifiedCategory = data['category']?.toString() ?? selectedCategory;
+      verifiedCategory = data['category']?.toString().trim() ?? '';
+      if (verifiedCategory.isEmpty) {
+        throw ApiException('Rider category missing. Please contact an organizer.');
+      }
     } on ApiException catch (e) {
       verifyError = e.message;
     } catch (e) {
@@ -135,33 +135,36 @@ class _ScannerScreenState extends State<ScannerScreen> {
     if (_isProcessing) return;
     setState(() => _isProcessing = true);
 
-    // Parse QR – supports JSON {"rider_id":"...","name":"...","category":"..."}
-    // or a plain rider_id string.
-    String riderId;
-    String? qrName;
-    String qrCategory;
+    // Read only the rider ID, from a JSON object or a plain ID string.
+    String riderId = rawValue.trim();
     try {
-      final Map<String, dynamic> qrData =
-          jsonDecode(rawValue) as Map<String, dynamic>;
-      riderId = qrData['rider_id']?.toString() ?? rawValue.trim();
-      qrName = qrData['name']?.toString();
-      // Fall back to the volunteer's current checkpoint category
-      qrCategory = qrData['category']?.toString() ??
-          LocalStorageService.checkpointCategory;
-    } catch (_) {
-      riderId = rawValue.trim();
-      qrCategory = LocalStorageService.checkpointCategory;
+      final dynamic qrData = jsonDecode(rawValue);
+      if (qrData is Map<String, dynamic>) {
+        riderId = qrData['rider_id']?.toString().trim() ?? '';
+      } else if (qrData is String) {
+        riderId = qrData.trim();
+      }
+    } on FormatException {
+      // Plain rider IDs do not need JSON decoding.
+    }
+
+    if (riderId.isEmpty) {
+      setState(() => _isProcessing = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('QR code must contain a Rider ID.'),
+        backgroundColor: AppConstants.primaryColor,
+      ));
+      return;
     }
 
     // Step 1 — Show QR preview with SEARCH / CANCEL.
     if (!mounted) return;
     final doSearch = await _showQRPreviewDialog(
       riderId: riderId,
-      qrName: qrName,
-      category: qrCategory,
     );
 
-    if (!mounted || doSearch != true) {
+    if (!mounted) return;
+    if (doSearch != true) {
       setState(() => _isProcessing = false);
       return;
     }
@@ -177,14 +180,16 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
     String? verifyError;
     String? verifiedName;
-    String verifiedCategory = qrCategory;
+    String verifiedCategory = '';
     try {
       final data = await ApiService.verifyRider(
         riderId: riderId,
-        category: qrCategory,
       );
       verifiedName = data['rider_name']?.toString();
-      verifiedCategory = data['category']?.toString() ?? qrCategory;
+      verifiedCategory = data['category']?.toString().trim() ?? '';
+      if (verifiedCategory.isEmpty) {
+        throw ApiException('Rider category missing. Please contact an organizer.');
+      }
     } on ApiException catch (e) {
       verifyError = e.message;
     } catch (e) {
@@ -223,8 +228,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   Future<bool?> _showQRPreviewDialog({
     required String riderId,
-    required String? qrName,
-    required String category,
   }) {
     if (!mounted) return Future.value(null);
 
@@ -263,43 +266,13 @@ class _ScannerScreenState extends State<ScannerScreen> {
               ),
               const SizedBox(height: 14),
               Text(
-                qrName ?? riderId,
+                riderId,
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 26,
                   fontWeight: FontWeight.w800,
                 ),
                 textAlign: TextAlign.center,
-              ),
-              if (qrName != null) ...[
-                const SizedBox(height: 4),
-                Text(
-                  'ID: $riderId',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.38),
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 10),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                decoration: BoxDecoration(
-                  color: AppConstants.secondaryColor.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: AppConstants.secondaryColor.withValues(alpha: 0.4),
-                  ),
-                ),
-                child: Text(
-                  category,
-                  style: const TextStyle(
-                    color: AppConstants.secondaryColor,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
-                ),
               ),
               const SizedBox(height: 20),
               Row(
@@ -1074,10 +1047,7 @@ class _ManualCheckInDialog extends StatefulWidget {
 
 class _ManualCheckInDialogState extends State<_ManualCheckInDialog> {
   final _riderIdController = TextEditingController();
-  String _selectedCategory = '40km';
   String? _validationError;
-
-  static const List<String> _categories = ['40km', '100km'];
 
   @override
   void dispose() {
@@ -1121,7 +1091,7 @@ class _ManualCheckInDialogState extends State<_ManualCheckInDialog> {
       setState(() => _validationError = 'Please enter a Rider ID.');
       return;
     }
-    Navigator.of(context).pop((riderId: riderId, category: _selectedCategory));
+    Navigator.of(context).pop(riderId);
   }
 
   @override
@@ -1195,62 +1165,6 @@ class _ManualCheckInDialogState extends State<_ManualCheckInDialog> {
                     color: AppConstants.primaryColor, fontSize: 12),
               ),
             ],
-
-            const SizedBox(height: 16),
-
-            // Category dropdown
-            const Text(
-              'Category',
-              style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 6),
-            Listener(
-              onPointerDown: (_) =>
-                  FocusManager.instance.primaryFocus?.unfocus(),
-              child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.07),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.15)),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: _selectedCategory,
-                  isExpanded: true,
-                  dropdownColor: const Color(0xFF3A3A3A),
-                  icon: const Icon(Icons.keyboard_arrow_down,
-                      color: Colors.white54),
-                  items: _categories
-                      .map(
-                        (cat) => DropdownMenuItem(
-                          value: cat,
-                          child: Row(
-                            children: [
-                              const Icon(Icons.directions_bike,
-                                  color: Colors.white54, size: 16),
-                              const SizedBox(width: 10),
-                              Text(cat,
-                                  style: const TextStyle(
-                                      color: Colors.white)),
-                            ],
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (val) {
-                    if (val != null) {
-                      setState(() => _selectedCategory = val);
-                    }
-                  },
-                ),
-              ),
-            ),
-            ),
 
             const SizedBox(height: 24),
 

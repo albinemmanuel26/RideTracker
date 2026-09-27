@@ -215,17 +215,15 @@ class ApiService {
   }
 
   // ── verifyRider ────────────────────────────────────────────────────────────
-  /// Verifies a rider exists and belongs to the given category.
-  /// Returns a map `{rider_name, category}` on success.
-  /// Throws [ApiException] if the rider is not found or category mismatches.
+  /// Verifies a rider by ID and retrieves their category.
+  /// Returns a map `{rider_id, rider_name, category}` on success.
+  /// Throws [ApiException] if rider verification fails.
   static Future<Map<String, dynamic>> verifyRider({
     required String riderId,
-    required String category,
   }) async {
     final data = await _post({
       'action': 'verifyRider',
       'rider_id': riderId,
-      'category': category,
     });
 
     if (data['status'] == 'success') {

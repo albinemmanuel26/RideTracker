@@ -26,6 +26,10 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>RideTrack needs camera access to scan rider QR codes at checkpoints.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>RideTrack may access photos when saving scan results.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -56,21 +60,6 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>UISupportedInterfaceOrientations~ipad</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<!-- Camera permission for QR code scanning -->
-	<key>NSCameraUsageDescription</key>
-	<string>RideTrack needs camera access to scan rider QR codes at checkpoints.</string>
-	<!-- Photo library (not required, but avoids crash on some iOS versions) -->
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>RideTrack may access photos when saving scan results.</string>
 </dict>
 </plist>
