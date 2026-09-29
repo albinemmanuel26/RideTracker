@@ -1,5 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants/app_constants.dart';
+import '../models/checkpoint.dart';
 
 class LocalStorageService {
   static SharedPreferences? _prefs;
@@ -22,7 +23,10 @@ class LocalStorageService {
     await _prefs!.setString(AppConstants.keyVolunteerRole, volunteerRole);
     await _prefs!.setString(AppConstants.keyCheckpointId, checkpointId);
     await _prefs!.setString(AppConstants.keyCheckpointName, checkpointName);
-    await _prefs!.setString(AppConstants.keyCheckpointCategory, checkpointCategory);
+    await _prefs!.setString(
+      AppConstants.keyCheckpointCategory,
+      Checkpoint.normalizeCategory(checkpointCategory),
+    );
   }
 
   static Future<void> clearSession() async {
@@ -53,6 +57,7 @@ class LocalStorageService {
   static String get checkpointName =>
       _prefs?.getString(AppConstants.keyCheckpointName) ?? '';
 
-  static String get checkpointCategory =>
-      _prefs?.getString(AppConstants.keyCheckpointCategory) ?? '';
+  static String get checkpointCategory => Checkpoint.normalizeCategory(
+    _prefs?.getString(AppConstants.keyCheckpointCategory) ?? '',
+  );
 }

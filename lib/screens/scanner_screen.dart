@@ -69,12 +69,17 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Future<void> _processManualEntry({
     required String riderId,
   }) async {
-    if (_isProcessing) return;
+    if (!mounted || _isProcessing) return;
     setState(() => _isProcessing = true);
+    await _verifyAndConfirmRider(riderId: riderId);
+  }
 
+  // Shared by manual entry and QR search after their input/preview steps.
+  // Callers hold _isProcessing until this flow finishes or is cancelled.
+  Future<void> _verifyAndConfirmRider({required String riderId}) async {
     if (!mounted) return;
 
-    // Step 1 — Verify rider via API and show loading while waiting.
+    // Verify rider via API and show loading while waiting.
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -169,59 +174,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
       return;
     }
 
-    // Step 2 — Verify rider via API.
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(
-        child: CircularProgressIndicator(color: AppConstants.primaryColor),
-      ),
-    );
-
-    String? verifyError;
-    String? verifiedName;
-    String verifiedCategory = '';
-    try {
-      final data = await ApiService.verifyRider(
-        riderId: riderId,
-      );
-      verifiedName = data['rider_name']?.toString();
-      verifiedCategory = data['category']?.toString().trim() ?? '';
-      if (verifiedCategory.isEmpty) {
-        throw ApiException('Rider category missing. Please contact an organizer.');
-      }
-    } on ApiException catch (e) {
-      verifyError = e.message;
-    } catch (e) {
-      verifyError = 'Verification failed. Please try again.';
-    }
-
-    if (!mounted) return;
-    Navigator.of(context).pop(); // close loading
-
-    if (verifyError != null) {
-      setState(() => _isProcessing = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(verifyError),
-        backgroundColor: AppConstants.primaryColor,
-      ));
-      return;
-    }
-
-    // Step 3 — Show confirmation dialog with SUBMIT / CANCEL.
-    if (!mounted) return;
-    final confirmed = await _showConfirmationDialog(
-      riderId: riderId,
-      riderName: verifiedName,
-      category: verifiedCategory,
-    );
-
-    if (!mounted) return;
-    if (confirmed == true) {
-      await _submitScan(riderId: riderId, category: verifiedCategory);
-    } else {
-      setState(() => _isProcessing = false);
-    }
+    await _verifyAndConfirmRider(riderId: riderId);
   }
 
   // ── QR Preview Popup ──────────────────────────────────────────────────────
@@ -880,18 +833,26 @@ class _ScannerScreenState extends State<ScannerScreen> {
         ],
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-              horizontal: 28, vertical: 24),
-          child: Column(
-            children: [
-              _buildVolunteerCard(),
-              const Spacer(),
-              _buildScanArea(),
-              const SizedBox(height: 28),
-              _buildManualCheckIn(),
-              const Spacer(),
-            ],
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: (constraints.maxHeight - 48).clamp(0.0, double.infinity),
+              ),
+              child: IntrinsicHeight(
+                child: Column(
+                  children: [
+                    _buildVolunteerCard(),
+                    const Spacer(),
+                    _buildScanArea(),
+                    const SizedBox(height: 28),
+                    _buildManualCheckIn(),
+                    const Spacer(),
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -1144,8 +1105,8 @@ class _ManualCheckInDialogState extends State<_ManualCheckInDialog> {
             TextField(
               controller: _riderIdController,
               style: const TextStyle(color: Colors.white),
-              keyboardType: TextInputType.text,
-              inputFormatters: [FilteringTextInputFormatter.singleLineFormatter],
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               autofocus: true,
               onChanged: (_) {
                 if (_validationError != null) {

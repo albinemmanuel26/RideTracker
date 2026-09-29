@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/foundation.dart';
 import '../constants/app_constants.dart';
 import '../models/checkpoint.dart';
 import '../models/volunteer.dart';
@@ -22,6 +21,14 @@ class DuplicateScanException extends ApiException {
   const DuplicateScanException(super.message);
 }
 
+class _UncertainScanException extends ApiException {
+  const _UncertainScanException(super.message);
+}
+
+class _RetryableApiException extends ApiException {
+  const _RetryableApiException(super.message);
+}
+
 // ---------------------------------------------------------------------------
 // API Service
 // ---------------------------------------------------------------------------
@@ -29,28 +36,24 @@ class DuplicateScanException extends ApiException {
 class ApiService {
   static final Uri _baseUri = Uri.parse(AppConstants.apiUrl);
 
-  /// POST helper — injects the API key as `key` (matches Apps Script check).
-  ///
-  /// Uses [HttpClient] directly (not [http.Client]) so we can:
-  ///  1. Set [HttpClientRequest.followRedirects] = false per request, ensuring
-  ///     the POST body is not lost when Google Apps Script issues a redirect.
-  ///  2. Supply a [badCertificateCallback] covering all Google-owned domains,
-  ///     which fixes CERTIFICATE_VERIFY_FAILED on Android devices whose trust
-  ///     store is missing Google's intermediate CA (affects emulators and some
-  ///     older devices).  Hostname identity is still verified by the OS.
-  static Future<Map<String, dynamic>> _post(
-      Map<String, dynamic> body) async {
-    body['key'] = AppConstants.apiKey;
-    final encodedBody = jsonEncode(body);
+  // Only read-only actions use this helper. Each retry starts at the exec URL.
+  static Future<Map<String, dynamic>> _read(Map<String, dynamic> body) async {
+    for (var attempt = 0; ; attempt++) {
+      try {
+        return await _post(body);
+      } on _RetryableApiException {
+        if (attempt == 2) rethrow;
+        await Future<void>.delayed(Duration(seconds: attempt + 1));
+      }
+    }
+  }
 
-    final httpClient = HttpClient()
-      ..badCertificateCallback =
-          (X509Certificate cert, String host, int port) {
-        return host.endsWith('.google.com') ||
-            host == 'google.com' ||
-            host.endsWith('.googleusercontent.com') ||
-            host.endsWith('.googleapis.com');
-      };
+  /// Posts once, then fetches the Apps Script Content Service result via GET.
+  /// Redirects never replay the POST body, which may record a rider scan.
+  static Future<Map<String, dynamic>> _post(Map<String, dynamic> body) async {
+    final encodedBody = jsonEncode({...body, 'key': AppConstants.apiKey});
+    final httpClient = HttpClient();
+    var redirects = 0;
 
     try {
       Uri uri = _baseUri;
@@ -64,64 +67,119 @@ class ApiService {
         ..headers.set('Content-Type', 'application/json')
         ..write(encodedBody);
 
-      final postResponse =
-          await request.close().timeout(const Duration(seconds: 30));
+      var response = await request.close().timeout(const Duration(seconds: 30));
 
-      // Step 2 — Apps Script responds with 302 to a googleusercontent.com URL
-      // that serves the JSON result via GET.  Follow it as GET (not POST);
-      // re-POSTing to that URL causes 405 Method Not Allowed.
-      if (postResponse.statusCode >= 300 && postResponse.statusCode < 400) {
-        final location = postResponse.headers.value('location');
-        await postResponse.drain<void>();
+      // Content Service redirects to a one-time result URL. Follow the whole
+      // chain, but bound it to avoid redirect loops. Never resend credentials.
+      // HttpClientResponse.isRedirect is false for POST + 302 in dart:io.
+      // Inspect the status explicitly for Apps Script's POST response.
+      while (const {301, 302, 303, 307, 308}.contains(response.statusCode)) {
+        final location = response.headers.value(HttpHeaders.locationHeader);
+        final status = response.statusCode;
+        await response.drain<void>().timeout(const Duration(seconds: 30));
 
-        if (location == null) {
+        if (location == null || location.isEmpty) {
           throw const ApiException('Invalid redirect from server.');
         }
-
-        final getRequest = await httpClient
-            .getUrl(Uri.parse(location))
-            .timeout(const Duration(seconds: 30));
-        getRequest.followRedirects = false;
-
-        final getResponse =
-            await getRequest.close().timeout(const Duration(seconds: 30));
-        final responseBody =
-            await getResponse.transform(utf8.decoder).join();
-
-        if (getResponse.statusCode != 200) {
-          throw ApiException(
-              'Server error (${getResponse.statusCode}). Please try again.');
+        if (++redirects > 5) {
+          throw const ApiException(
+            'Too many server redirects. Check the Apps Script deployment.',
+          );
         }
 
-        return jsonDecode(responseBody) as Map<String, dynamic>;
+        final nextUri = uri.resolve(location);
+        if (nextUri.host == 'accounts.google.com') {
+          throw const ApiException(
+            'The backend requires Google sign-in. Check the Apps Script '
+            'web app access settings.',
+          );
+        }
+        if (nextUri.scheme != 'https' ||
+            nextUri.userInfo.isNotEmpty ||
+            nextUri.port != 443 ||
+            (nextUri.host != 'script.google.com' &&
+                nextUri.host != 'script.googleusercontent.com')) {
+          throw const ApiException('Unexpected redirect from server.');
+        }
+        // 307/308 require preserving the method. Do not silently turn an
+        // unexecuted POST into a GET or replay a potentially completed scan.
+        if (redirects == 1 && (status == 307 || status == 308)) {
+          throw const ApiException(
+            'Unexpected POST redirect. Check the Apps Script deployment URL.',
+          );
+        }
+
+        uri = nextUri;
+        final getRequest = await httpClient
+            .getUrl(uri)
+            .timeout(const Duration(seconds: 30));
+        getRequest.followRedirects = false;
+        response = await getRequest.close().timeout(
+          const Duration(seconds: 30),
+        );
       }
 
-      // No redirect — response came directly from the exec URL.
-      final responseBody =
-          await postResponse.transform(utf8.decoder).join();
+      final responseBody = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 30));
 
-      if (postResponse.statusCode != 200) {
+      if (response.statusCode != 200) {
+        if (body['action'] == 'scanCheckpoint' &&
+            (redirects > 0 || response.statusCode == 404)) {
+          throw _UncertainScanException(
+            'Could not retrieve the check-in result (${response.statusCode}). '
+            'The check-in may already be saved. Retry the same rider at this '
+            'checkpoint; “Already scanned” confirms an existing check-in.',
+          );
+        }
+        if (const {
+              408,
+              429,
+              500,
+              502,
+              503,
+              504,
+            }.contains(response.statusCode) ||
+            (response.statusCode == 404 && redirects > 0)) {
+          throw _RetryableApiException(
+            'Server temporarily unavailable (${response.statusCode}). Please try again.',
+          );
+        }
         throw ApiException(
-            'Server error (${postResponse.statusCode}). Please try again.');
+          'Server error (${response.statusCode}). Please try again.',
+        );
       }
 
-      return jsonDecode(responseBody) as Map<String, dynamic>;
+      try {
+        final data = jsonDecode(responseBody);
+        if (data is Map<String, dynamic>) {
+          return data;
+        }
+      } on FormatException {
+        // Login and deployment error pages can return HTML with status 200.
+      }
+      throw const ApiException(
+        'The backend did not return JSON. Check the Apps Script deployment '
+        'URL and web app access settings.',
+      );
     } on ApiException {
       rethrow;
-    } on SocketException catch (e) {
-      debugPrint('ApiService SocketException: $e');
-      throw const ApiException(
-          'No internet connection. Check your network and try again.');
-    } on TimeoutException catch (e) {
-      debugPrint('ApiService TimeoutException: $e');
-      throw const ApiException(
-          'Request timed out. The server may be busy — please try again.');
+    } on SocketException {
+      throw const _RetryableApiException(
+        'No internet connection. Check your network and try again.',
+      );
+    } on TimeoutException {
+      if (body['action'] == 'scanCheckpoint') {
+        throw const _UncertainScanException('Check-in response timed out.');
+      }
+      throw const _RetryableApiException(
+        'Request timed out. The server may be busy — please try again.',
+      );
     } catch (e) {
-      // Log the real exception so it appears in debug output.
-      debugPrint('ApiService unexpected error: $e');
       throw ApiException('Network error: $e');
     } finally {
-      httpClient.close(force: false);
+      httpClient.close(force: true);
     }
   }
 
@@ -150,26 +208,25 @@ class ApiService {
       );
     }
 
-    throw ApiException(
-        data['message']?.toString() ?? 'Invalid phone or PIN.');
+    throw ApiException(data['message']?.toString() ?? 'Invalid phone or PIN.');
   }
 
   // ── getCheckpoints ─────────────────────────────────────────────────────────
   /// Returns active checkpoints from the Checkpoints_Master sheet.
   /// Each entry includes checkpoint_id, checkpoint_name, category.
   static Future<List<Checkpoint>> getCheckpoints() async {
-    final data = await _post({'action': 'getCheckpoints'});
+    final data = await _read({'action': 'getCheckpoints'});
 
     if (data['status'] == 'success') {
-      final List<dynamic> raw =
-          data['checkpoints'] as List<dynamic>;
+      final List<dynamic> raw = data['checkpoints'] as List<dynamic>;
       return raw
           .map((e) => Checkpoint.fromJson(e as Map<String, dynamic>))
           .toList();
     }
 
     throw ApiException(
-        data['message']?.toString() ?? 'Failed to load checkpoints.');
+      data['message']?.toString() ?? 'Failed to load checkpoints.',
+    );
   }
 
   // ── scanCheckpoint ─────────────────────────────────────────────────────────
@@ -192,13 +249,46 @@ class ApiService {
     required String checkpoint,
     required String scannedBy,
   }) async {
-    final data = await _post({
-      'action': 'scanCheckpoint',
-      'rider_id': riderId,
-      'category': category,
-      'checkpoint': checkpoint,
-      'scanned_by': scannedBy,
-    });
+    late final Map<String, dynamic> data;
+    try {
+      data = await _post({
+        'action': 'scanCheckpoint',
+        'rider_id': riderId,
+        'category': category,
+        'checkpoint': checkpoint,
+        'scanned_by': scannedBy,
+      });
+    } on _UncertainScanException {
+      bool? recorded;
+      for (var attempt = 0; attempt < 2; attempt++) {
+        if (attempt > 0) {
+          await Future<void>.delayed(const Duration(seconds: 2));
+        }
+        try {
+          recorded = await _checkScanStatus(
+            riderId: riderId,
+            category: category,
+            checkpoint: checkpoint,
+            retry: false,
+          );
+        } on ApiException {
+          recorded = null;
+        }
+        if (recorded == true) break;
+      }
+      if (recorded == true) {
+        throw const DuplicateScanException(
+          'Confirmed: this rider is already checked in at this checkpoint.',
+        );
+      }
+      throw ApiException(
+        recorded == false
+            ? 'No check-in found yet. The original request may still finish. '
+                  'Wait briefly, then retry the same rider at this checkpoint.'
+            : 'Could not confirm check-in status. It may already be saved. '
+                  'Wait briefly, then retry the same rider at this checkpoint.',
+      );
+    }
 
     if (data['status'] == 'success') {
       return data['data'] as Map<String, dynamic>;
@@ -206,31 +296,60 @@ class ApiService {
 
     if (data['status'] == 'duplicate') {
       throw DuplicateScanException(
-          data['message']?.toString() ??
-              'Already scanned at this checkpoint.');
+        data['message']?.toString() ?? 'Already scanned at this checkpoint.',
+      );
     }
 
     throw ApiException(
-        data['message']?.toString() ?? 'Scan failed. Please try again.');
+      data['message']?.toString() ?? 'Scan failed. Please try again.',
+    );
   }
 
   // ── verifyRider ────────────────────────────────────────────────────────────
+  /// Read-only lookup; never resubmits a scan.
+  static Future<bool> checkScanStatus({
+    required String riderId,
+    required String category,
+    required String checkpoint,
+  }) => _checkScanStatus(
+    riderId: riderId,
+    category: category,
+    checkpoint: checkpoint,
+    retry: true,
+  );
+
+  static Future<bool> _checkScanStatus({
+    required String riderId,
+    required String category,
+    required String checkpoint,
+    required bool retry,
+  }) async {
+    final data = await (retry ? _read : _post)({
+      'action': 'checkScanStatus',
+      'rider_id': riderId,
+      'category': category,
+      'checkpoint': checkpoint,
+    });
+    if (data['status'] == 'success' && data['recorded'] is bool) {
+      return data['recorded'] as bool;
+    }
+    throw const ApiException('Check-in status unavailable.');
+  }
+
   /// Verifies a rider by ID and retrieves their category.
   /// Returns a map `{rider_id, rider_name, category}` on success.
   /// Throws [ApiException] if rider verification fails.
   static Future<Map<String, dynamic>> verifyRider({
     required String riderId,
   }) async {
-    final data = await _post({
-      'action': 'verifyRider',
-      'rider_id': riderId,
-    });
+    final data = await _read({'action': 'verifyRider', 'rider_id': riderId});
 
     if (data['status'] == 'success') {
       return data['data'] as Map<String, dynamic>;
     }
 
     throw ApiException(
-        data['message']?.toString() ?? 'Rider verification failed.');
+      data['message']?.toString() ?? 'Rider verification failed.',
+    );
   }
 }
