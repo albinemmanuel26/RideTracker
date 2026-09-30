@@ -1,9 +1,10 @@
+import '../services/rider_service.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../constants/app_constants.dart';
 import '../models/checkpoint.dart';
-import '../services/api_service.dart';
+import '../services/scan_history_service.dart';
 import '../services/local_storage_service.dart';
 import 'login_screen.dart';
 import 'qr_scanner_page.dart';
@@ -80,6 +81,64 @@ class _ScannerScreenState extends State<ScannerScreen> {
   // Shared by manual entry and QR search after their input/preview steps.
   // Callers hold _isProcessing until this flow finishes or is cancelled.
   Future<void> _verifyAndConfirmRider({required String riderId}) async {
+    if (!mounted) return;
+
+    while (mounted) {
+      final pending = RiderService.riderDownload;
+      if (pending != null) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const PopScope(
+            canPop: false,
+            child: AlertDialog(
+              title: Text('Downloading rider master'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('Please wait before verifying this rider.'),
+                  SizedBox(height: 16),
+                  LinearProgressIndicator(),
+                ],
+              ),
+            ),
+          ),
+        );
+        await pending;
+        if (!mounted) return;
+        Navigator.of(context).pop();
+      }
+      if (RiderService.riderDownloadError == null &&
+          LocalStorageService.riderList != null)
+        break;
+      final retry = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Rider master unavailable'),
+          content: Text(
+            RiderService.riderDownloadError ??
+                'Download riders before scanning.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      if (retry != true) {
+        setState(() => _isProcessing = false);
+        return;
+      }
+      RiderService.downloadRiderList();
+    }
     if (!mounted) return;
 
     final list = LocalStorageService.riderList;
@@ -431,20 +490,25 @@ class _ScannerScreenState extends State<ScannerScreen> {
     String? uploadError;
     bool isDuplicate = false;
     Map<String, dynamic>? scanData;
+    Map<String, dynamic>? entry;
     try {
-      scanData = await ApiService.scanCheckpoint(
+      entry = await ScanHistoryService.record(
         riderId: riderId,
+        riderName:
+            LocalStorageService.riderList?.riders[riderId]?.name ?? riderId,
         category: category,
         checkpoint: _checkpointName,
         scannedBy: widget.volunteerPhone,
       );
-    } on DuplicateScanException catch (e) {
-      uploadError = e.message;
+      await ScanHistoryService.submit(entry);
+      scanData = {'rider_name': entry['rider_name']};
+    } on LocalDuplicateScanException catch (e) {
       isDuplicate = true;
-    } on ApiException catch (e) {
-      uploadError = e.message;
+      uploadError = e.toString();
     } catch (_) {
-      uploadError = 'Upload failed. Please try again.';
+      uploadError = entry == null
+          ? 'Could not save on this device. Nothing was sent. Please try again.'
+          : 'Saved on this device. Upload not confirmed. Use Settings → Scan history & sync later; you do not need to scan again.';
     }
 
     if (!mounted) return;
@@ -456,6 +520,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
         success: false,
         message: uploadError,
         isDuplicate: isDuplicate,
+        savedLocally: entry != null,
       );
     } else {
       final riderName = scanData?['rider_name']?.toString() ?? 'Rider';
@@ -472,6 +537,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     required bool success,
     required String message,
     bool isDuplicate = false,
+    bool savedLocally = false,
   }) async {
     if (!mounted) return;
 
@@ -495,7 +561,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
         : isDuplicate
         ? Colors.orange.shade700
         : AppConstants.primaryColor;
-    final String title = success
+    final String title = savedLocally
+        ? 'Saved locally'
+        : success
         ? 'Success!'
         : isDuplicate
         ? 'Already Scanned'

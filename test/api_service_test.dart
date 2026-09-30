@@ -168,75 +168,48 @@ void main() {
       }
     });
   }
-  for (final recorded in [true, false, null]) {
-    test(
-      'recovers scan 404 with status=$recorded without replaying scan',
-      () async {
-        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-        final client = HttpClient();
-        final statusClient = HttpClient();
-        final secondStatusClient = HttpClient();
-        var clientIndex = 0;
-        final actions = <String>[];
-        server.listen((request) async {
-          final body = jsonDecode(await utf8.decoder.bind(request).join());
-          actions.add(body['action'] as String);
-          if (body['action'] == 'scanCheckpoint') {
-            request.response.statusCode = 404;
-          } else {
-            request.response.write(
-              jsonEncode(
-                recorded == null
-                    ? {'status': 'error'}
-                    : {'status': 'success', 'recorded': recorded},
+  for (final code in [200, 404, 503]) {
+    test('uncertain scan HTTP $code does not retry or query history', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final client = HttpClient();
+      final actions = <String>[];
+      server.listen((request) async {
+        final body = jsonDecode(await utf8.decoder.bind(request).join());
+        actions.add(body['action'] as String);
+        request.response.statusCode = code;
+        request.response.write('<html>Unavailable</html>');
+        await request.response.close();
+      });
+      try {
+        await HttpOverrides.runZoned(
+          () async {
+            await expectLater(
+              ApiService.scanCheckpoint(
+                riderId: '123',
+                category: '40',
+                checkpoint: 'Start',
+                scannedBy: '456',
+              ),
+              throwsA(
+                isA<ApiException>().having(
+                  (e) => e.message,
+                  'message',
+                  contains('Retrying may create another'),
+                ),
               ),
             );
-          }
-          await request.response.close();
-        });
-        try {
-          await HttpOverrides.runZoned(
-            () async {
-              await expectLater(
-                ApiService.scanCheckpoint(
-                  riderId: '123',
-                  category: '40',
-                  checkpoint: 'Start',
-                  scannedBy: '456',
-                ),
-                throwsA(
-                  recorded == true
-                      ? isA<DuplicateScanException>()
-                      : isA<ApiException>().having(
-                          (e) => e.message,
-                          'message',
-                          contains(
-                            recorded == false
-                                ? 'No check-in found yet'
-                                : 'Could not confirm',
-                          ),
-                        ),
-                ),
-              );
-            },
-            createHttpClient: (_) => _LocalClient(
-              [client, statusClient, secondStatusClient][clientIndex++],
-              Uri.parse('http://127.0.0.1:${server.port}/'),
-            ),
-          );
-          expect(actions, [
-            'scanCheckpoint',
-            'checkScanStatus',
-            if (recorded != true) 'checkScanStatus',
-          ]);
-        } finally {
-          statusClient.close(force: true);
-          secondStatusClient.close(force: true);
-          client.close(force: true);
-          await server.close(force: true);
-        }
-      },
-    );
+          },
+          createHttpClient: (_) => _LocalClient(
+            client,
+            Uri.parse('http://127.0.0.1:${server.port}/'),
+          ),
+        );
+        expect(actions, ['scanCheckpoint']);
+      } finally {
+        client.close(force: true);
+        await server.close(force: true);
+      }
+    });
   }
   for (final action in [
     'loginVolunteer',

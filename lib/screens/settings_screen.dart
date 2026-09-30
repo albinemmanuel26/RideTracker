@@ -1,3 +1,4 @@
+import 'scan_history_screen.dart';
 import 'package:flutter/material.dart';
 import '../constants/app_constants.dart';
 import '../models/checkpoint.dart';
@@ -24,13 +25,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _error = null;
     });
     try {
-      await RiderService.refresh();
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Rider list updated.')));
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      while (mounted) {
+        try {
+          final warning = await RiderService.refresh();
+          if (!mounted) return;
+          setState(() => _error = warning);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(warning ?? 'Riders and checkpoints updated.'),
+            ),
+          );
+          break;
+        } on ApiException catch (e) {
+          if (!mounted) return;
+          setState(() => _error = e.message);
+          final retry = await showDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Rider master update failed'),
+              content: Text(e.message),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          );
+          if (retry != true) break;
+        }
+      }
     } finally {
       if (mounted) setState(() => _isProcessing = false);
     }
@@ -50,6 +79,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: const EdgeInsets.all(20),
         children: [
           Card(
+            child: ListTile(
+              leading: const Icon(Icons.history),
+              title: const Text('Scan history & sync'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: _isProcessing
+                  ? null
+                  : () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const ScanHistoryScreen(),
+                      ),
+                    ),
+            ),
+          ),
+          Card(
             child: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -61,7 +104,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   const SizedBox(height: 12),
                   const Text(
-                    'Rider details are saved on this device for scanning. Refresh after an organizer changes the rider list.',
+                    'Riders and checkpoint options are saved on this device. Refresh both after an organizer changes either list.',
                   ),
                   const SizedBox(height: 12),
                   Text('Last updated: $timestamp'),
@@ -93,8 +136,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         : const Icon(Icons.refresh),
                     label: Text(
                       _isProcessing
-                          ? 'Updating rider list…'
-                          : 'Refresh rider list',
+                          ? 'Updating riders and checkpoints…'
+                          : 'Refresh riders and checkpoints',
                     ),
                   ),
                 ],
@@ -129,7 +172,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     List<Checkpoint>? checkpoints;
     String? error;
     try {
-      checkpoints = await ApiService.getCheckpoints();
+      checkpoints = LocalStorageService.checkpoints;
     } on ApiException catch (e) {
       error = e.message;
     } catch (_) {
@@ -142,7 +185,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (error != null || checkpoints == null || checkpoints.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(error ?? 'No active checkpoints available.'),
+          content: Text(
+            error ??
+                'No saved checkpoints. Refresh riders and checkpoints in Settings.',
+          ),
           backgroundColor: AppConstants.primaryColor,
         ),
       );

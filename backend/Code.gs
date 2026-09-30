@@ -37,6 +37,9 @@ function doPost(e) {
       case "getCheckpoints":
         return getCheckpoints(data);
 
+      case "syncScans":
+        return syncScans(data);
+
       case "scanCheckpoint":
         return scanCheckpoint(data);
 
@@ -116,8 +119,7 @@ function loginVolunteer(data) {
 // 📥 GET CHECKPOINTS (FOR POPUP)
 //
 function getCheckpoints(data) {
-  const sheet = getSheet(SHEETS.checkpoints_master);
-  const rows = sheet.getDataRange().getValues();
+  const rows = checkpointRows(true);
   const headers = rows[0];
 
   const idIndex = headers.indexOf("checkpoint_id");
@@ -147,19 +149,19 @@ function getCheckpoints(data) {
 //
 // 🚴 SCAN CHECKPOINT (CATEGORY + CHECKPOINT SAFE)
 //
-function scanCheckpoint(data) {
+function prepareScan(data) {
   const { rider_id, category, checkpoint, scanned_by } = data;
 
   // 🔍 Validate rider
   const rider = getRider(rider_id);
 
   if (!rider) {
-    return response({ status: "error", message: "Rider not found" });
+    return ({ status: "error", message: "Rider not found" });
   }
 
   // 🔍 Validate category
   if (rider.category != category) {
-    return response({
+    return ({
       status: "error",
       message: "Category mismatch"
     });
@@ -167,14 +169,14 @@ function scanCheckpoint(data) {
 
   // 🔍 Validate checkpoint
   if (!isValidCheckpoint(category, checkpoint)) {
-    return response({
+    return ({
       status: "error",
       message: "Invalid checkpoint"
     });
   }
 
   if (!scanned_by) {
-    return response({
+    return ({
       status: "error",
       message: "Scanner required"
     });
@@ -184,13 +186,22 @@ function scanCheckpoint(data) {
   const volunteerName = getVolunteerName(scanned_by);
 
   if (!volunteerName) {
-    return response({
+    return ({
       status: "error",
       message: "Invalid volunteer"
     });
   }
 
-  // Serialize scan-history reads and writes across requests to this script.
+  return {row: [new Date().getTime(), rider_id, rider.name, category, checkpoint, volunteerName, new Date(), data.entry_id || "", data.scanned_at || ""],
+    data: {rider_name: rider.name, category: rider.category, scanned_by: volunteerName}};
+}
+
+function scanCheckpoint(data) {
+  const entryError = validateEntry(data, false);
+  if (entryError) return response({status: "error", message: entryError});
+  const prepared = prepareScan(data);
+  if (!prepared.row) return response(prepared);
+  // Serialize only the append; repeated rider/checkpoint submissions are allowed.
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) {
     return response({
@@ -201,55 +212,24 @@ function scanCheckpoint(data) {
 
   try {
     const sheet = getSheet(SHEETS.scans);
-    const rows = sheet.getDataRange().getValues();
-    const headers = rows[0];
-
-    const riderIndex = headers.indexOf("rider_id");
-    const checkpointIndex = headers.indexOf("checkpoint");
-    const categoryIndex = headers.indexOf("category");
-
-    // 🚫 Prevent duplicate
-    for (let i = 1; i < rows.length; i++) {
-      if (
-        rows[i][riderIndex] == rider_id &&
-        rows[i][checkpointIndex] == checkpoint &&
-        rows[i][categoryIndex] == category
-      ) {
-        return response({
-          status: "duplicate",
-          message: "Already scanned"
-        });
-      }
-    }
-
-    // ✅ Insert with volunteer_name
-    sheet.appendRow([
-      new Date().getTime(),
-      rider_id,
-      rider.name,
-      category,
-      checkpoint,
-      volunteerName, // ✅ NOW NAME
-      new Date()
-    ]);
+    if (data.entry_id) ensureEntryColumns(sheet);
+    sheet.appendRow(prepared.row);
 
     SpreadsheetApp.flush();
 
     return response({
       status: "success",
       message: "Scan successful",
-      data: {
-        rider_name: rider.name,
-        category: rider.category,
-        scanned_by: volunteerName
-      }
+      entry_id: data.entry_id || null,
+      data: prepared.data
     });
   } finally {
     lock.releaseLock();
   }
 }
 
-// Read-only lookup of the same key used by duplicate detection.
+// Legacy read-only status endpoint for older app versions.
+// New clients do not query scan history after uncertain submissions.
 // A missing row is only a snapshot: a timed-out scan may still be running.
 function checkScanStatus(data) {
   const { rider_id, category, checkpoint } = data;
@@ -273,22 +253,16 @@ function checkScanStatus(data) {
 }
 
 function getVolunteerName(phone) {
-  const sheet = getSheet(SHEETS.volunteers);
-  const data = sheet.getDataRange().getValues();
-
-  const headers = data[0];
-  const phoneIndex = headers.indexOf("phone");
-  const nameIndex = headers.indexOf("name");
-
-  for (let i = 1; i < data.length; i++) {
-    const sheetPhone = data[i][phoneIndex].toString().trim();
-
-    if (sheetPhone === phone.toString().trim()) {
-      return data[i][nameIndex];
-    }
-  }
-
-  return null;
+  const volunteers = masterData("volunteers", () => {
+    const rows = getSheet(SHEETS.volunteers).getDataRange().getValues();
+    const phoneIndex = rows[0].indexOf("phone");
+    const nameIndex = rows[0].indexOf("name");
+    if (phoneIndex < 0 || nameIndex < 0) throw new Error("Missing volunteer headers");
+    // Do not cache PINs or authentication decisions. Login always reads live data.
+    return rows.slice(1).map(row => [String(row[phoneIndex]).trim(), row[nameIndex]]);
+  });
+  const volunteer = volunteers.find(row => row[0] === String(phone).trim());
+  return volunteer ? volunteer[1] : null;
 }
 
 function verifyRider(data) {
@@ -325,29 +299,11 @@ function verifyRider(data) {
 // 🔍 GET RIDER (now split across two category-specific tabs)
 //
 function getRider(rider_id) {
-  const tabs = [
-    { name: SHEETS.riders_40, category: "40" },
-    { name: SHEETS.riders_100, category: "100" }
-  ];
-
-  for (const tab of tabs) {
-    const sheet = getSheet(tab.name);
-    const data = sheet.getDataRange().getValues();
-    const headers = data[0];
-
-    const riderIndex = headers.indexOf("rider_id");
-    const nameIndex = headers.indexOf("name");
-
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][riderIndex] == rider_id) {
-        return {
-          name: data[i][nameIndex],
-          category: tab.category
-        };
-      }
-    }
+  const groups = masterData("riders", loadRiders);
+  for (const category of ["40", "100"]) {
+    const rider = groups[category].find(r => r.rider_id === String(rider_id).trim());
+    if (rider) return {name: rider.rider_name, category: rider.category};
   }
-
   return null;
 }
 
@@ -362,8 +318,7 @@ function isValidCheckpoint(category, checkpoint) {
   const riderCategory = String(category).trim();
   if (riderCategory !== "40" && riderCategory !== "100") return false;
   const checkpointName = String(checkpoint).trim();
-  const sheet = getSheet(SHEETS.checkpoints_master);
-  const data = sheet.getDataRange().getValues();
+  const data = checkpointRows();
 
   const headers = data[0];
   const nameIndex = headers.indexOf("checkpoint_name");
@@ -399,6 +354,11 @@ function response(data) {
 
 // Return both complete master sheets together. Any error fails the whole download.
 function getRiders() {
+  // Explicit downloads always read the sheets and replace the shared cache.
+  return response({status: "success", riders: masterData("riders", loadRiders, true)});
+}
+
+function loadRiders() {
   const riders = {};
   const seen = new Set();
   for (const [category, sheetName] of [["40", SHEETS.riders_40], ["100", SHEETS.riders_100]]) {
@@ -406,17 +366,113 @@ function getRiders() {
     const headers = rows[0] || [];
     const idIndex = headers.indexOf("rider_id");
     const nameIndex = headers.indexOf("name");
-    if (idIndex < 0 || nameIndex < 0) throw new Error("Missing rider headers in " + sheetName);
+    if (idIndex < 0) throw new Error("Missing rider_id header in " + sheetName);
     riders[category] = [];
     for (const row of rows.slice(1)) {
       if (row.every(value => String(value).trim() === "")) continue;
-      const id = String(row[idIndex]).trim();
-      const name = String(row[nameIndex]).trim();
-      if (!id || !name) throw new Error("Incomplete rider in " + sheetName);
+      const id = String(row[idIndex] == null ? "" : row[idIndex]).trim();
+      if (!id) continue;
+      const name = String(row[nameIndex] == null ? "" : row[nameIndex]).trim() || "NA";
       if (seen.has(id)) throw new Error("Duplicate rider ID: " + id);
       seen.add(id);
       riders[category].push({rider_id: id, rider_name: name, category: category});
     }
   }
-  return response({status: "success", riders: riders});
+  return riders;
+}
+
+// Cache is only an optimization. Entries may disappear before their TTL.
+// Serialize fills/refreshes so an older in-flight read cannot overwrite refresh.
+function masterData(name, load, refresh = false) {
+  const key = "master-v1:" + name;
+  let cache;
+  try { cache = CacheService.getScriptCache(); } catch (_) {}
+  function read() {
+    try {
+      const value = cache && cache.get(key);
+      return value ? JSON.parse(value) : null;
+    } catch (_) { return null; }
+  }
+  if (!refresh) {
+    const hit = read();
+    if (hit !== null) return hit;
+  }
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    if (!refresh) {
+      const hit = read();
+      if (hit !== null) return hit;
+    }
+    const value = load();
+    try {
+      // Remove the previous snapshot even if the new one is too large to cache.
+      cache.remove(key);
+      const encoded = JSON.stringify(value);
+      // Conservative bound: UTF-8 uses at most 3 bytes per UTF-16 code unit.
+      // Stay below CacheService's 100 KB per-entry limit, including Unicode.
+      if (encoded.length <= 30000) cache.put(key, encoded, 300);
+    } catch (_) { /* Cache outages must not prevent sheet-backed operations. */ }
+    return value;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function checkpointRows(refresh = false) {
+  return masterData("checkpoints", () => {
+    const rows = getSheet(SHEETS.checkpoints_master).getDataRange().getValues();
+    if (["checkpoint_id", "checkpoint_name", "category", "is_active"].some(h => !rows[0].includes(h))) {
+      throw new Error("Missing checkpoint headers");
+    }
+    return rows;
+  }, refresh);
+}
+
+// Add these columns after the existing seven scan columns; never shift old data.
+function ensureEntryColumns(sheet) {
+  const range = sheet.getRange(1, 8, 1, 2);
+  const headers = range.getValues()[0];
+  if ((headers[0] && headers[0] !== "entry_id") || (headers[1] && headers[1] !== "scanned_at")) {
+    throw new Error("Columns H/I must be entry_id/scanned_at. See deployment notes.");
+  }
+  if (!headers[0] || !headers[1]) range.setValues([["entry_id", "scanned_at"]]);
+}
+
+function validateEntry(entry, required) {
+  if (!entry || typeof entry !== "object") return "Invalid entry";
+  if (!required && !entry.entry_id) return null; // Older clients remain supported.
+  if (!/^[a-f0-9]{32}$/.test(entry.entry_id || "")) return "Invalid entry ID";
+  if (typeof entry.scanned_at !== "string" || !Number.isFinite(Date.parse(entry.scanned_at))) return "Invalid scan time";
+  if (!["rider_id", "category", "checkpoint", "scanned_by"].every(k => entry[k] != null && String(entry[k]).trim())) return "Incomplete entry";
+  return null;
+}
+
+function syncScans(data) {
+  if (!Array.isArray(data.entries) || data.entries.length > 50) return response({status: "error", message: "Sync accepts up to 50 entries"});
+  const errors = {};
+  // Resolve master data before acquiring the append lock (cache fills use it too).
+  const entries = data.entries.map(entry => {
+    const error = validateEntry(entry, true);
+    if (error) { errors[entry && entry.entry_id || "invalid"] = error; return null; }
+    return {entry: entry, prepared: prepareScan(entry)};
+  }).filter(Boolean);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = getSheet(SHEETS.scans);
+    ensureEntryColumns(sheet);
+    const lastRow = sheet.getLastRow();
+    const existing = new Set(lastRow > 1 ? sheet.getRange(2, 8, lastRow - 1, 1).getValues().map(row => String(row[0])) : []);
+    const confirmed = [];
+    for (const {entry, prepared} of entries) {
+      if (existing.has(entry.entry_id)) { confirmed.push(entry.entry_id); continue; }
+      if (!prepared.row) { errors[entry.entry_id] = prepared.message; continue; }
+      sheet.appendRow(prepared.row);
+      existing.add(entry.entry_id);
+      confirmed.push(entry.entry_id);
+    }
+    SpreadsheetApp.flush();
+    return response({status: "success", confirmed_ids: confirmed, errors: errors});
+  } finally { lock.releaseLock(); }
 }

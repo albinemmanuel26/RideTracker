@@ -3,18 +3,13 @@ function runScanLockTests(source) {
   function check(value, message) {
     if (!value) throw new Error(message);
   }
-  for (const scenario of ['success', 'duplicate', 'busy', 'readError', 'writeError', 'flushError']) {
+  for (const scenario of ['success', 'busy', 'writeError', 'flushError']) {
     let held = false;
     const events = [];
     const rows = [['id', 'rider_id', 'name', 'category', 'checkpoint']];
     if (scenario === 'duplicate') rows.push([1, '123', 'Rider', '40', 'Start']);
     const sheet = {
-      getDataRange: () => ({getValues: () => {
-        check(held, 'Scan history read without lock');
-        events.push('read');
-        if (scenario === 'readError') throw new Error('readError');
-        return rows;
-      }}),
+      getDataRange: () => { throw new Error('Scan must not read history'); },
       appendRow: row => {
         check(held, 'Write without lock');
         events.push('write');
@@ -64,14 +59,14 @@ function runScanLockTests(source) {
       const expected = scenario === 'busy' ? 'error' : scenario;
       check(result.status === expected, 'Wrong result: ' + scenario);
       if (scenario === 'success') {
-        check(events.join(',') === 'lock,read,write,flush,release', 'Incorrect ordering');
-        check(scan(request).status === 'duplicate', 'Repeated scan not rejected');
-        check(rows.length === 2, 'Repeated scan wrote another row');
+        check(events.join(',') === 'lock,write,flush,release', 'Incorrect ordering');
+        check(scan(request).status === 'success', 'Repeated scan should succeed');
+        check(rows.length === 3, 'Repeated scan must append another row');
       } else {
         check(!events.includes('write'), 'Unexpected write');
         if (scenario === 'busy') check(events.join(',') === 'lock', 'Busy request accessed history');
       }
     }
   }
-  return 'Six lock scenarios passed, including repeat submission and failure cleanup.';
+  return 'Four append-lock scenarios passed, including allowed repeats and failure cleanup.';
 }

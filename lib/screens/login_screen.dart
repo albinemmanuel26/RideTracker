@@ -22,7 +22,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   bool _isLoading = false;
   bool _obscurePin = true;
-  bool _isDownloadingRiders = false;
   String? _errorMessage;
 
   @override
@@ -48,11 +47,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (!mounted) return;
 
-      setState(() => _isDownloadingRiders = true);
-      await RiderService.refresh();
-      if (mounted) setState(() => _isDownloadingRiders = false);
-      if (!mounted) return;
-
       // Login success → show checkpoint selection
       await _showCheckpointDialog(volunteer);
     } on ApiException catch (e) {
@@ -62,51 +56,17 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _isDownloadingRiders = false;
         });
       }
     }
   }
 
   Future<void> _showCheckpointDialog(Volunteer volunteer) async {
-    List<Checkpoint>? checkpoints;
-    String? loadError;
-
-    // Fetch checkpoints while showing a loading dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(
-        child: CircularProgressIndicator(color: AppConstants.primaryColor),
-      ),
-    );
-
-    try {
-      checkpoints = await ApiService.getCheckpoints();
-    } on ApiException catch (e) {
-      loadError = e.message;
-    } finally {
-      if (mounted) Navigator.of(context).pop(); // close loading
-    }
-
-    if (!mounted) return;
-
-    if (loadError != null) {
-      _showErrorSnackBar(loadError);
-      return;
-    }
-
-    if (checkpoints == null || checkpoints.isEmpty) {
-      _showErrorSnackBar('No active checkpoints available.');
-      return;
-    }
-
     await showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => _CheckpointDialog(
         volunteer: volunteer,
-        checkpoints: checkpoints!,
         onSelected: (checkpoint) async {
           await LocalStorageService.saveSession(
             volunteerPhone: volunteer.phone,
@@ -117,7 +77,8 @@ class _LoginScreenState extends State<LoginScreen> {
             checkpointCategory: checkpoint.category,
           );
 
-          if (!mounted) return;
+          if (!mounted || !ctx.mounted) return;
+          Navigator.of(ctx).pop();
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(
               builder: (_) => ScannerScreen(
@@ -130,15 +91,6 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           );
         },
-      ),
-    );
-  }
-
-  void _showErrorSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: AppConstants.primaryColor,
       ),
     );
   }
@@ -234,13 +186,6 @@ class _LoginScreenState extends State<LoginScreen> {
             _buildPhoneField(),
             const SizedBox(height: 16),
             _buildPinField(),
-            if (_isDownloadingRiders) ...[
-              const SizedBox(height: 14),
-              const Text(
-                'Downloading rider list…',
-                style: TextStyle(color: Colors.white70),
-              ),
-            ],
             if (_errorMessage != null) ...[
               const SizedBox(height: 14),
               Container(
@@ -419,14 +364,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
 class _CheckpointDialog extends StatefulWidget {
   final Volunteer volunteer;
-  final List<Checkpoint> checkpoints;
   final Future<void> Function(Checkpoint checkpoint) onSelected;
 
-  const _CheckpointDialog({
-    required this.volunteer,
-    required this.checkpoints,
-    required this.onSelected,
-  });
+  const _CheckpointDialog({required this.volunteer, required this.onSelected});
 
   @override
   State<_CheckpointDialog> createState() => _CheckpointDialogState();
@@ -437,7 +377,82 @@ class _CheckpointDialogState extends State<_CheckpointDialog> {
   bool _isSubmitting = false;
   String? _error;
 
+  List<Checkpoint> _checkpoints = LocalStorageService.checkpoints;
+  bool _downloading = true;
+  bool _ridersReady = false;
+  String _riderStatus = 'Downloading riders…';
+  String _checkpointStatus = 'Downloading checkpoints…';
+  bool _retryRiders = false;
+  bool _checkpointsReady = false;
+  bool _checkpointDownloading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _download();
+  }
+
+  Future<void> _download({bool failedOnly = false}) async {
+    final riders = !failedOnly || !_ridersReady;
+    final checkpoints = !failedOnly || !_checkpointsReady;
+    setState(() {
+      _downloading = true;
+      if (riders) _ridersReady = false;
+      _retryRiders = false;
+      _error = null;
+      if (riders) _riderStatus = 'Downloading riders…';
+      if (checkpoints) {
+        _checkpointDownloading = true;
+        _checkpointsReady = false;
+        _checkpointStatus = 'Downloading checkpoints…';
+      }
+    });
+    try {
+      await RiderService.refresh(
+        downloadRiders: riders,
+        downloadCheckpoints: checkpoints,
+        onRidersDone: (error) {
+          if (!mounted) return;
+          setState(() {
+            _ridersReady = error == null;
+            _riderStatus = error == null
+                ? 'Rider master updated.'
+                : 'Rider master failed: $error';
+          });
+        },
+        onCheckpointsDone: (error) {
+          if (!mounted) return;
+          setState(() {
+            _checkpointDownloading = false;
+            _checkpointsReady = error == null;
+            _checkpoints = LocalStorageService.checkpoints;
+            final id = _selected?.id;
+            _selected = null;
+            for (final checkpoint in _checkpoints) {
+              if (checkpoint.id == id) _selected = checkpoint;
+            }
+            _checkpointStatus = error == null
+                ? 'Checkpoints updated.'
+                : 'Checkpoint download failed. ${_checkpoints.isEmpty ? "No saved options available." : "Using saved options."}\n$error';
+          });
+        },
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _retryRiders = true;
+        _error = e.message;
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _downloading = false);
+      }
+    }
+  }
+
   Future<void> _onSubmit() async {
+    if (_isSubmitting) return;
+    if (!_checkpointsReady) return;
     if (_selected == null) {
       setState(() => _error = 'Please select a checkpoint.');
       return;
@@ -448,148 +463,182 @@ class _CheckpointDialogState extends State<_CheckpointDialog> {
       _error = null;
     });
 
-    await widget.onSelected(_selected!);
-
-    if (mounted) setState(() => _isSubmitting = false);
+    try {
+      await widget.onSelected(_selected!);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'Could not save session. Please try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: AppConstants.surfaceColor,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
+    return PopScope(
+      canPop: !_checkpointDownloading,
+      child: Dialog(
+        backgroundColor: AppConstants.surfaceColor,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppConstants.primaryColor.withValues(
+                          alpha: 0.15,
+                        ),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.location_on,
+                        color: AppConstants.primaryColor,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Select Checkpoint',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          Text(
+                            'Hello, ${widget.volunteer.name}!',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.55),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  _riderStatus,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _checkpointStatus,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                if (_downloading) const LinearProgressIndicator(),
+                if ((_retryRiders || !_checkpointsReady) && !_downloading)
+                  TextButton(onPressed: _download, child: const Text('Retry')),
+                TextButton(
+                  onPressed: _downloading || _isSubmitting
+                      ? null
+                      : () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                const Divider(color: Colors.white12),
+                const SizedBox(height: 16),
                 Container(
-                  padding: const EdgeInsets.all(8),
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
                   decoration: BoxDecoration(
-                    color: AppConstants.primaryColor.withValues(alpha: 0.15),
-                    shape: BoxShape.circle,
+                    color: Colors.white.withValues(alpha: 0.07),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.15),
+                    ),
                   ),
-                  child: const Icon(
-                    Icons.location_on,
-                    color: AppConstants.primaryColor,
-                    size: 22,
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<Checkpoint>(
+                      value: _selected,
+                      hint: Text(
+                        'Choose your checkpoint',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.4),
+                        ),
+                      ),
+                      isExpanded: true,
+                      dropdownColor: const Color(0xFF3A3A3A),
+                      icon: const Icon(
+                        Icons.keyboard_arrow_down,
+                        color: Colors.white54,
+                      ),
+                      items: _checkpoints
+                          .map(
+                            (cp) => DropdownMenuItem(
+                              value: cp,
+                              child: Text(
+                                cp.name,
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (val) => setState(() {
+                        _selected = val;
+                        _error = null;
+                      }),
+                    ),
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Select Checkpoint',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                        ),
+                if (_error != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: AppConstants.primaryColor,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 20),
+                SizedBox(
+                  height: 50,
+                  child: ElevatedButton(
+                    onPressed: _isSubmitting || !_checkpointsReady
+                        ? null
+                        : _onSubmit,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppConstants.primaryColor,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: AppConstants.primaryColor
+                          .withValues(alpha: 0.5),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                      Text(
-                        'Hello, ${widget.volunteer.name}!',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.55),
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
+                    ),
+                    child: _isSubmitting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2.5,
+                            ),
+                          )
+                        : const Text(
+                            'START SCANNING',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 1.1,
+                            ),
+                          ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 20),
-            const Divider(color: Colors.white12),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.07),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<Checkpoint>(
-                  value: _selected,
-                  hint: Text(
-                    'Choose your checkpoint',
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.4),
-                    ),
-                  ),
-                  isExpanded: true,
-                  dropdownColor: const Color(0xFF3A3A3A),
-                  icon: const Icon(
-                    Icons.keyboard_arrow_down,
-                    color: Colors.white54,
-                  ),
-                  items: widget.checkpoints
-                      .map(
-                        (cp) => DropdownMenuItem(
-                          value: cp,
-                          child: Text(
-                            cp.name,
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (val) => setState(() {
-                    _selected = val;
-                    _error = null;
-                  }),
-                ),
-              ),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 10),
-              Text(
-                _error!,
-                style: const TextStyle(
-                  color: AppConstants.primaryColor,
-                  fontSize: 12,
-                ),
-              ),
-            ],
-            const SizedBox(height: 20),
-            SizedBox(
-              height: 50,
-              child: ElevatedButton(
-                onPressed: _isSubmitting ? null : _onSubmit,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppConstants.primaryColor,
-                  foregroundColor: Colors.white,
-                  disabledBackgroundColor: AppConstants.primaryColor.withValues(
-                    alpha: 0.5,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: _isSubmitting
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 2.5,
-                        ),
-                      )
-                    : const Text(
-                        'START SCANNING',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1.1,
-                        ),
-                      ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

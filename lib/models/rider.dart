@@ -9,10 +9,10 @@ class Rider {
     final id = json['rider_id']?.toString().trim() ?? '';
     final name = json['rider_name']?.toString().trim() ?? '';
     final category = json['category']?.toString().trim() ?? '';
-    if (id.isEmpty || name.isEmpty || !['40', '100'].contains(category)) {
+    if (id.isEmpty || !['40', '100'].contains(category)) {
       throw const FormatException('Invalid rider details');
     }
-    return Rider(id: id, name: name, category: category);
+    return Rider(id: id, name: name.isEmpty ? 'NA' : name, category: category);
   }
 
   Map<String, dynamic> toJson() => {

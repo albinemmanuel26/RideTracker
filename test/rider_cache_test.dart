@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -37,28 +38,92 @@ void main() {
           {'rider_id': '456', 'rider_name': 'Long Rider', 'category': '100'},
         ],
       };
+      var failCheckpoints = false;
+      final firstRequests = <String>{};
+      final requests = <String>[];
+      final bothStarted = Completer<void>();
       server.listen((request) async {
         final body = jsonDecode(await utf8.decoder.bind(request).join());
+        requests.add(body['action'] as String);
+        firstRequests.add(body['action'] as String);
+        if (firstRequests.length == 2 && !bothStarted.isCompleted) {
+          bothStarted.complete();
+        }
+        // Neither response is released until both downloads have started.
+        await bothStarted.future.timeout(const Duration(seconds: 5));
+        if (body['action'] == 'getCheckpoints') {
+          if (failCheckpoints) {
+            request.response.write(
+              jsonEncode({
+                'status': 'error',
+                'message': 'Checkpoint download failed',
+              }),
+            );
+            await request.response.close();
+            return;
+          }
+          request.response.write(
+            jsonEncode({
+              'status': 'success',
+              'checkpoints': [
+                {
+                  'checkpoint_id': 'CP1',
+                  'checkpoint_name': 'Start',
+                  'category': '40&100',
+                },
+              ],
+            }),
+          );
+          await request.response.close();
+          return;
+        }
         expect(body['action'], 'getRiders');
         request.response.write(
           jsonEncode({'status': 'success', 'riders': groups}),
         );
         await request.response.close();
       });
-      Future<void> refresh() {
-        final client = HttpClient();
-        return HttpOverrides.runZoned(
-          RiderService.refresh,
-          createHttpClient: (_) =>
-              _Client(client, Uri.parse('http://127.0.0.1:${server.port}/')),
-        );
+      Future<String?> refresh({bool riders = true, bool checkpoints = true}) async {
+        final clients = List.generate(3, (_) => HttpClient());
+        var index = 0;
+        try {
+          return await HttpOverrides.runZoned(
+            () => RiderService.refresh(downloadRiders: riders, downloadCheckpoints: checkpoints),
+            createHttpClient: (_) => _Client(
+              clients[index++],
+              Uri.parse('http://127.0.0.1:${server.port}/'),
+            ),
+          );
+        } finally {
+          for (final client in clients) {
+            client.close(force: true);
+          }
+        }
       }
 
       try {
         await refresh();
-        final saved = LocalStorageService.riderList!;
+        expect(LocalStorageService.checkpoints.single.name, 'Start');
+        var saved = LocalStorageService.riderList!;
+        expect(identical(saved, LocalStorageService.riderList), isTrue);
+        await LocalStorageService.init();
+        expect(identical(saved, LocalStorageService.riderList), isTrue);
         expect(saved.riders.keys, ['123', '456']);
         expect(saved.riders['456']!.category, '100');
+        final savedCheckpoints = LocalStorageService.checkpoints;
+        failCheckpoints = true;
+        expect(await refresh(), contains('Rider master updated successfully'));
+        expect(identical(LocalStorageService.riderList, saved), isFalse);
+        saved = LocalStorageService.riderList!;
+        expect(
+          identical(LocalStorageService.checkpoints, savedCheckpoints),
+          isTrue,
+        );
+        failCheckpoints = false;
+        final beforeRetry = requests.length;
+        expect(await refresh(riders: false), isNull);
+        expect(requests.sublist(beforeRetry), ['getCheckpoints']);
+        expect(identical(LocalStorageService.riderList, saved), isTrue);
         for (final invalid in [
           {'40': groups['40']},
           {
@@ -77,6 +142,10 @@ void main() {
           groups = invalid;
           await expectLater(refresh(), throwsA(isA<ApiException>()));
           expect(LocalStorageService.riderList!.toJson(), saved.toJson());
+          expect(
+            identical(LocalStorageService.checkpoints, savedCheckpoints),
+            isFalse,
+          );
         }
       } finally {
         await server.close(force: true);

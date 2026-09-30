@@ -50,7 +50,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Settings'));
       await tester.pumpAndSettle();
-      expect(find.text('Refresh rider list'), findsOneWidget);
+      expect(find.text('Refresh riders and checkpoints'), findsOneWidget);
       expect(find.textContaining('Last updated:'), findsOneWidget);
       expect(find.text('Change Checkpoint'), findsOneWidget);
       expect(tester.takeException(), isNull);

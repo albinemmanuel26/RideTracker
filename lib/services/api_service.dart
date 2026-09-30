@@ -129,12 +129,10 @@ class ApiService {
           .timeout(const Duration(seconds: 30));
 
       if (response.statusCode != 200) {
-        if (body['action'] == 'scanCheckpoint' &&
-            (redirects > 0 || response.statusCode == 404)) {
+        if (body['action'] == 'scanCheckpoint') {
           throw _UncertainScanException(
             'Could not retrieve the check-in result (${response.statusCode}). '
-            'The check-in may already be saved. Retry the same rider at this '
-            'checkpoint; “Already scanned” confirms an existing check-in.',
+            'The check-in may already be saved. Retrying can create another row.',
           );
         }
         if (const {
@@ -163,6 +161,9 @@ class ApiService {
       } on FormatException {
         // Login and deployment error pages can return HTML with status 200.
       }
+      if (body['action'] == 'scanCheckpoint') {
+        throw const _UncertainScanException('Unexpected check-in response.');
+      }
       throw const _RetryableApiException(
         'The backend returned an unexpected response. Please try again. '
         'If this keeps happening, check the Apps Script deployment URL '
@@ -171,6 +172,9 @@ class ApiService {
     } on ApiException {
       rethrow;
     } on SocketException {
+      if (body['action'] == 'scanCheckpoint') {
+        throw const _UncertainScanException('Check-in connection lost.');
+      }
       throw const _RetryableApiException(
         'No internet connection. Check your network and try again.',
       );
@@ -249,15 +253,49 @@ class ApiService {
     final data = await _retrySafePost({'action': 'getCheckpoints'});
 
     if (data['status'] == 'success') {
-      final List<dynamic> raw = data['checkpoints'] as List<dynamic>;
-      return raw
-          .map((e) => Checkpoint.fromJson(e as Map<String, dynamic>))
-          .toList();
+      try {
+        final raw = data['checkpoints'] as List;
+        return raw
+            .map((e) => Checkpoint.fromJson(e as Map<String, dynamic>))
+            .toList();
+      } catch (_) {
+        throw const ApiException(
+          'Invalid checkpoint list. Please retry the download.',
+        );
+      }
     }
 
     throw ApiException(
       data['message']?.toString() ?? 'Failed to load checkpoints.',
     );
+  }
+
+  static Future<void> uploadScanEntry(Map<String, dynamic> entry) async {
+    final data = await _post({...entry, 'action': 'scanCheckpoint'});
+    if (data['status'] != 'success') {
+      throw ApiException(
+        data['message']?.toString() ?? 'Upload not confirmed.',
+      );
+    }
+    if (data['entry_id'] != entry['entry_id']) {
+      throw const ApiException(
+        'Entry ID not confirmed. Update the backend and sync again.',
+      );
+    }
+  }
+
+  static Future<Map<String, dynamic>> syncScanEntries(
+    List<Map<String, dynamic>> entries,
+  ) async {
+    final data = await _post({'action': 'syncScans', 'entries': entries});
+    if (data['status'] != 'success' ||
+        data['confirmed_ids'] is! List ||
+        data['errors'] is! Map) {
+      throw ApiException(
+        data['message']?.toString() ?? 'Sync not confirmed. Please try again.',
+      );
+    }
+    return data;
   }
 
   // ── scanCheckpoint ─────────────────────────────────────────────────────────
@@ -267,12 +305,11 @@ class ApiService {
   ///  • rider_id exists in Riders_Master
   ///  • category matches master record
   ///  • checkpoint is valid for the category
-  ///  • no duplicate scan (same rider + checkpoint + category)
   ///  • scanned_by (volunteer phone) resolves to a known volunteer
   ///
   /// Returns the scan data map `{rider_name, category, scanned_by}` on success,
   /// where scanned_by is the resolved volunteer name.
-  /// Throws [DuplicateScanException] for duplicates.
+  /// Repeated submissions are allowed. Legacy servers may reject duplicates.
   /// Throws [ApiException] for all other errors.
   static Future<Map<String, dynamic>> scanCheckpoint({
     required String riderId,
@@ -290,34 +327,9 @@ class ApiService {
         'scanned_by': scannedBy,
       });
     } on _UncertainScanException {
-      bool? recorded;
-      for (var attempt = 0; attempt < 2; attempt++) {
-        if (attempt > 0) {
-          await Future<void>.delayed(const Duration(seconds: 2));
-        }
-        try {
-          recorded = await _checkScanStatus(
-            riderId: riderId,
-            category: category,
-            checkpoint: checkpoint,
-            retry: false,
-          );
-        } on ApiException {
-          recorded = null;
-        }
-        if (recorded == true) break;
-      }
-      if (recorded == true) {
-        throw const DuplicateScanException(
-          'Confirmed: this rider is already checked in at this checkpoint.',
-        );
-      }
-      throw ApiException(
-        recorded == false
-            ? 'No check-in found yet. The original request may still finish. '
-                  'Wait briefly, then retry the same rider at this checkpoint.'
-            : 'Could not confirm check-in status. It may already be saved. '
-                  'Wait briefly, then retry the same rider at this checkpoint.',
+      throw const ApiException(
+        'Could not confirm whether the check-in was saved. '
+        'Wait briefly before retrying. Retrying may create another check-in row.',
       );
     }
 
