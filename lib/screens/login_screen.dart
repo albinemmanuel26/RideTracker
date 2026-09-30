@@ -113,6 +113,7 @@ class _LoginScreenState extends State<LoginScreen> {
               builder: (_) => ScannerScreen(
                 checkpointName: checkpoint.name,
                 checkpointId: checkpoint.id,
+                checkpointCategory: checkpoint.category,
                 volunteerPhone: volunteer.phone,
                 volunteerName: volunteer.name,
               ),

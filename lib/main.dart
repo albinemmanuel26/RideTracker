@@ -44,6 +44,7 @@ class _AppEntry extends StatelessWidget {
       return ScannerScreen(
         checkpointName: LocalStorageService.checkpointName,
         checkpointId: LocalStorageService.checkpointId,
+        checkpointCategory: LocalStorageService.checkpointCategory,
         volunteerPhone: LocalStorageService.volunteerPhone,
         volunteerName: LocalStorageService.volunteerName,
       );

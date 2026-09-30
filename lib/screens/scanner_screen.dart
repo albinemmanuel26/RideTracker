@@ -11,6 +11,7 @@ import 'qr_scanner_page.dart';
 class ScannerScreen extends StatefulWidget {
   final String checkpointName;
   final String checkpointId;
+  final String checkpointCategory;
   final String volunteerPhone;
   final String volunteerName;
 
@@ -18,6 +19,7 @@ class ScannerScreen extends StatefulWidget {
     super.key,
     required this.checkpointName,
     required this.checkpointId,
+    this.checkpointCategory = '',
     required this.volunteerPhone,
     required this.volunteerName,
   });
@@ -29,6 +31,7 @@ class ScannerScreen extends StatefulWidget {
 class _ScannerScreenState extends State<ScannerScreen> {
   late String _checkpointName;
   late String _checkpointId;
+  late String _checkpointCategory;
   bool _isProcessing = false;
 
   @override
@@ -36,6 +39,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     super.initState();
     _checkpointName = widget.checkpointName;
     _checkpointId = widget.checkpointId;
+    _checkpointCategory = Checkpoint.normalizeCategory(widget.checkpointCategory);
   }
 
   // ── Scan QR Button ─────────────────────────────────────────────────────────
@@ -732,6 +736,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                           setState(() {
                             _checkpointName = selected.name;
                             _checkpointId = selected.id;
+                            _checkpointCategory = selected.category;
                           });
                         },
                         style: ElevatedButton.styleFrom(
@@ -814,8 +819,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
         backgroundColor: AppConstants.primaryColor,
         foregroundColor: Colors.white,
         automaticallyImplyLeading: false,
+        centerTitle: false,
         title: Text(
-          'CP: $_checkpointName',
+          'Hi, ${widget.volunteerName}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: const TextStyle(
               fontSize: 16, fontWeight: FontWeight.w700),
         ),
@@ -843,7 +851,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
               child: IntrinsicHeight(
                 child: Column(
                   children: [
-                    _buildVolunteerCard(),
+                    _buildCheckpointCard(),
                     const Spacer(),
                     _buildScanArea(),
                     const SizedBox(height: 28),
@@ -860,7 +868,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
     );
   }
 
-  Widget _buildVolunteerCard() {
+  Widget _buildCheckpointCard() {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -877,45 +885,19 @@ class _ScannerScreenState extends State<ScannerScreen> {
               color: AppConstants.primaryColor.withValues(alpha: 0.15),
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.badge_outlined,
+            child: const Icon(Icons.location_on_outlined,
                 color: AppConstants.primaryColor, size: 20),
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.volunteerName,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                  ),
-                ),
-                Text(
-                  widget.volunteerPhone,
-                  style: const TextStyle(
-                      color: Colors.white54, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.green.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                  color: Colors.green.withValues(alpha: 0.3)),
-            ),
-            child: const Text(
-              'Active',
-              style: TextStyle(
-                color: Colors.greenAccent,
-                fontSize: 11,
+            child: Text(
+              _checkpointCategory.isEmpty
+                  ? 'CP: $_checkpointName'
+                  : 'CP: $_checkpointName ($_checkpointCategory)',
+              style: const TextStyle(
+                color: Colors.white,
                 fontWeight: FontWeight.w600,
+                fontSize: 16,
               ),
             ),
           ),
