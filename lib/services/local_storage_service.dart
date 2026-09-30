@@ -1,3 +1,5 @@
+import 'dart:convert';
+import '../models/rider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants/app_constants.dart';
 import '../models/checkpoint.dart';
@@ -7,6 +9,25 @@ class LocalStorageService {
 
   static Future<void> init() async {
     _prefs ??= await SharedPreferences.getInstance();
+  }
+
+  static RiderList? get riderList {
+    final raw = _prefs?.getString('rider_list_v1');
+    if (raw == null) return null;
+    try {
+      return RiderList.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Store both categories and timestamp as one snapshot, never partial updates.
+  static Future<void> saveRiderList(RiderList list) async {
+    final saved = await _prefs!.setString(
+      'rider_list_v1',
+      jsonEncode(list.toJson()),
+    );
+    if (!saved) throw StateError('Could not save rider list');
   }
 
   static Future<void> saveSession({

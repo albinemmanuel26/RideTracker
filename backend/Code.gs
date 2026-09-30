@@ -31,6 +31,9 @@ function doPost(e) {
       case "loginVolunteer":
         return loginVolunteer(data);
 
+      case "getRiders":
+        return getRiders();
+
       case "getCheckpoints":
         return getCheckpoints(data);
 
@@ -392,4 +395,28 @@ function response(data) {
   return ContentService
     .createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// Return both complete master sheets together. Any error fails the whole download.
+function getRiders() {
+  const riders = {};
+  const seen = new Set();
+  for (const [category, sheetName] of [["40", SHEETS.riders_40], ["100", SHEETS.riders_100]]) {
+    const rows = getSheet(sheetName).getDataRange().getValues();
+    const headers = rows[0] || [];
+    const idIndex = headers.indexOf("rider_id");
+    const nameIndex = headers.indexOf("name");
+    if (idIndex < 0 || nameIndex < 0) throw new Error("Missing rider headers in " + sheetName);
+    riders[category] = [];
+    for (const row of rows.slice(1)) {
+      if (row.every(value => String(value).trim() === "")) continue;
+      const id = String(row[idIndex]).trim();
+      const name = String(row[nameIndex]).trim();
+      if (!id || !name) throw new Error("Incomplete rider in " + sheetName);
+      if (seen.has(id)) throw new Error("Duplicate rider ID: " + id);
+      seen.add(id);
+      riders[category].push({rider_id: id, rider_name: name, category: category});
+    }
+  }
+  return response({status: "success", riders: riders});
 }

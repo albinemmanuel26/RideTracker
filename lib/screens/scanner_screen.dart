@@ -7,6 +7,7 @@ import '../services/api_service.dart';
 import '../services/local_storage_service.dart';
 import 'login_screen.dart';
 import 'qr_scanner_page.dart';
+import 'settings_screen.dart';
 
 class ScannerScreen extends StatefulWidget {
   final String checkpointName;
@@ -30,7 +31,6 @@ class ScannerScreen extends StatefulWidget {
 
 class _ScannerScreenState extends State<ScannerScreen> {
   late String _checkpointName;
-  late String _checkpointId;
   late String _checkpointCategory;
   bool _isProcessing = false;
 
@@ -38,8 +38,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
   void initState() {
     super.initState();
     _checkpointName = widget.checkpointName;
-    _checkpointId = widget.checkpointId;
-    _checkpointCategory = Checkpoint.normalizeCategory(widget.checkpointCategory);
+    _checkpointCategory = Checkpoint.normalizeCategory(
+      widget.checkpointCategory,
+    );
   }
 
   // ── Scan QR Button ─────────────────────────────────────────────────────────
@@ -70,9 +71,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   // ── Manual Entry Processing ────────────────────────────────────────────────
 
-  Future<void> _processManualEntry({
-    required String riderId,
-  }) async {
+  Future<void> _processManualEntry({required String riderId}) async {
     if (!mounted || _isProcessing) return;
     setState(() => _isProcessing = true);
     await _verifyAndConfirmRider(riderId: riderId);
@@ -83,44 +82,24 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Future<void> _verifyAndConfirmRider({required String riderId}) async {
     if (!mounted) return;
 
-    // Verify rider via API and show loading while waiting.
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(
-        child: CircularProgressIndicator(color: AppConstants.primaryColor),
-      ),
-    );
-
-    String? verifyError;
-    String? verifiedName;
-    String verifiedCategory = '';
-    try {
-      final data = await ApiService.verifyRider(
-        riderId: riderId,
-      );
-      verifiedName = data['rider_name']?.toString();
-      verifiedCategory = data['category']?.toString().trim() ?? '';
-      if (verifiedCategory.isEmpty) {
-        throw ApiException('Rider category missing. Please contact an organizer.');
-      }
-    } on ApiException catch (e) {
-      verifyError = e.message;
-    } catch (e) {
-      verifyError = 'Verification failed. Please try again.';
-    }
-
-    if (!mounted) return;
-    Navigator.of(context).pop(); // close loading
-
-    if (verifyError != null) {
+    final list = LocalStorageService.riderList;
+    final rider = list?.riders[riderId.trim()];
+    if (rider == null) {
       setState(() => _isProcessing = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(verifyError),
-        backgroundColor: AppConstants.primaryColor,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            list == null
+                ? 'Download the rider list in Settings before scanning.'
+                : 'Rider not found in the downloaded list. Refresh it in Settings if riders have been added.',
+          ),
+          action: SnackBarAction(label: 'Settings', onPressed: _openSettings),
+        ),
+      );
       return;
     }
+    final verifiedName = rider.name;
+    final verifiedCategory = rider.category;
 
     // Step 2 — Show confirmation dialog with verified name.
     if (!mounted) return;
@@ -159,18 +138,18 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
     if (riderId.isEmpty) {
       setState(() => _isProcessing = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('QR code must contain a Rider ID.'),
-        backgroundColor: AppConstants.primaryColor,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('QR code must contain a Rider ID.'),
+          backgroundColor: AppConstants.primaryColor,
+        ),
+      );
       return;
     }
 
     // Step 1 — Show QR preview with SEARCH / CANCEL.
     if (!mounted) return;
-    final doSearch = await _showQRPreviewDialog(
-      riderId: riderId,
-    );
+    final doSearch = await _showQRPreviewDialog(riderId: riderId);
 
     if (!mounted) return;
     if (doSearch != true) {
@@ -183,9 +162,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   // ── QR Preview Popup ──────────────────────────────────────────────────────
 
-  Future<bool?> _showQRPreviewDialog({
-    required String riderId,
-  }) {
+  Future<bool?> _showQRPreviewDialog({required String riderId}) {
     if (!mounted) return Future.value(null);
 
     return showDialog<bool>(
@@ -242,8 +219,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.white70,
                         side: const BorderSide(color: Colors.white24),
-                        padding:
-                            const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
@@ -262,8 +238,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppConstants.primaryColor,
                         foregroundColor: Colors.white,
-                        padding:
-                            const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
@@ -339,7 +314,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 textAlign: TextAlign.center,
               ),
               // Show ID beneath if name is known
-              if (displayName != null) ...[  
+              if (displayName != null) ...[
                 const SizedBox(height: 4),
                 Text(
                   'ID: $riderId',
@@ -352,8 +327,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
               const SizedBox(height: 10),
               // Category badge
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: AppConstants.secondaryColor.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(20),
@@ -377,13 +354,15 @@ class _ScannerScreenState extends State<ScannerScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.location_on,
-                      color: Colors.white30, size: 14),
+                  const Icon(
+                    Icons.location_on,
+                    color: Colors.white30,
+                    size: 14,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     _checkpointName,
-                    style: const TextStyle(
-                        color: Colors.white54, fontSize: 13),
+                    style: const TextStyle(color: Colors.white54, fontSize: 13),
                   ),
                 ],
               ),
@@ -399,8 +378,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.white70,
                         side: const BorderSide(color: Colors.white24),
-                        padding:
-                            const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
@@ -419,8 +397,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppConstants.primaryColor,
                         foregroundColor: Colors.white,
-                        padding:
-                            const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
@@ -481,8 +458,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
         isDuplicate: isDuplicate,
       );
     } else {
-      final riderName =
-          scanData?['rider_name']?.toString() ?? 'Rider';
+      final riderName = scanData?['rider_name']?.toString() ?? 'Rider';
       await _showResultDialog(
         success: true,
         message: '$riderName scanned successfully\nat $_checkpointName!',
@@ -502,25 +478,28 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final Color iconColor = success
         ? Colors.greenAccent
         : isDuplicate
-            ? Colors.orange
-            : AppConstants.primaryColor;
+        ? Colors.orange
+        : AppConstants.primaryColor;
     final IconData iconData = success
         ? Icons.check_circle
         : isDuplicate
-            ? Icons.warning_amber_rounded
-            : Icons.error_outline;
+        ? Icons.warning_amber_rounded
+        : Icons.error_outline;
     final Color bgColor = success
         ? Colors.green.withValues(alpha: 0.15)
         : isDuplicate
-            ? Colors.orange.withValues(alpha: 0.15)
-            : AppConstants.primaryColor.withValues(alpha: 0.15);
+        ? Colors.orange.withValues(alpha: 0.15)
+        : AppConstants.primaryColor.withValues(alpha: 0.15);
     final Color btnColor = success
         ? Colors.green.shade700
         : isDuplicate
-            ? Colors.orange.shade700
-            : AppConstants.primaryColor;
-    final String title =
-        success ? 'Success!' : isDuplicate ? 'Already Scanned' : 'Failed';
+        ? Colors.orange.shade700
+        : AppConstants.primaryColor;
+    final String title = success
+        ? 'Success!'
+        : isDuplicate
+        ? 'Already Scanned'
+        : 'Failed';
     await showDialog(
       context: context,
       barrierDismissible: false,
@@ -552,8 +531,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
               const SizedBox(height: 10),
               Text(
                 message,
-                style:
-                    const TextStyle(color: Colors.white70, fontSize: 14),
+                style: const TextStyle(color: Colors.white70, fontSize: 14),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
@@ -584,185 +562,15 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   // ── Change Checkpoint ──────────────────────────────────────────────────────
 
-  Future<void> _changeCheckpoint() async {
+  Future<void> _openSettings() async {
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const SettingsScreen()));
     if (!mounted) return;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(
-        child: CircularProgressIndicator(color: AppConstants.primaryColor),
-      ),
-    );
-
-    List<Checkpoint>? checkpoints;
-    String? error;
-    try {
-      checkpoints = await ApiService.getCheckpoints();
-    } on ApiException catch (e) {
-      error = e.message;
-    } catch (_) {
-      error = 'Failed to load checkpoints.';
-    }
-
-    if (!mounted) return;
-    Navigator.of(context).pop();
-
-    if (error != null || checkpoints == null || checkpoints.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(error ?? 'No active checkpoints available.'),
-          backgroundColor: AppConstants.primaryColor,
-        ),
-      );
-      return;
-    }
-
-    Checkpoint selected = checkpoints.firstWhere(
-      (c) => c.id == _checkpointId,
-      orElse: () => checkpoints!.first,
-    );
-
-    // Capture as non-nullable for use inside the dialog builder
-    final List<Checkpoint> cpList = checkpoints;
-
-    if (!mounted) return;
-    await showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => Dialog(
-          backgroundColor: AppConstants.surfaceColor,
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20)),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: AppConstants.primaryColor
-                            .withValues(alpha: 0.15),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.swap_horiz,
-                          color: AppConstants.primaryColor, size: 20),
-                    ),
-                    const SizedBox(width: 12),
-                    const Text(
-                      'Change Checkpoint',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.07),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                        color:
-                            Colors.white.withValues(alpha: 0.15)),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<Checkpoint>(
-                      value: selected,
-                      isExpanded: true,
-                      dropdownColor: const Color(0xFF3A3A3A),
-                      icon: const Icon(Icons.keyboard_arrow_down,
-                          color: Colors.white54),
-                      items: cpList
-                          .map(
-                            (cp) => DropdownMenuItem(
-                              value: cp,
-                              child: Text(cp.name,
-                                  style: const TextStyle(
-                                      color: Colors.white)),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (val) {
-                        if (val != null) {
-                          setDialogState(() => selected = val);
-                        }
-                      },
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.of(ctx).pop(),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white70,
-                          side:
-                              const BorderSide(color: Colors.white24),
-                          padding: const EdgeInsets.symmetric(
-                              vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: const Text('CANCEL'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () async {
-                          await LocalStorageService.saveSession(
-                            volunteerPhone: widget.volunteerPhone,
-                            volunteerName: widget.volunteerName,
-                            volunteerRole:
-                                LocalStorageService.volunteerRole,
-                            checkpointId: selected.id,
-                            checkpointName: selected.name,
-                            checkpointCategory: selected.category,
-                          );
-                          if (!ctx.mounted) return;
-                          Navigator.of(ctx).pop();
-                          if (!mounted) return;
-                          setState(() {
-                            _checkpointName = selected.name;
-                            _checkpointId = selected.id;
-                            _checkpointCategory = selected.category;
-                          });
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppConstants.primaryColor,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                              vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: const Text(
-                          'CONFIRM',
-                          style:
-                              TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+    setState(() {
+      _checkpointName = LocalStorageService.checkpointName;
+      _checkpointCategory = LocalStorageService.checkpointCategory;
+    });
   }
 
   // ── Logout ─────────────────────────────────────────────────────────────────
@@ -772,26 +580,31 @@ class _ScannerScreenState extends State<ScannerScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppConstants.surfaceColor,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16)),
-        title: const Text('Logout',
-            style: TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w700)),
-        content: const Text('Are you sure you want to logout?',
-            style: TextStyle(color: Colors.white70)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Logout',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+        ),
+        content: const Text(
+          'Are you sure you want to logout?',
+          style: TextStyle(color: Colors.white70),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('CANCEL',
-                style: TextStyle(color: Colors.white54)),
+            child: const Text(
+              'CANCEL',
+              style: TextStyle(color: Colors.white54),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
             child: const Text(
               'LOGOUT',
               style: TextStyle(
-                  color: AppConstants.primaryColor,
-                  fontWeight: FontWeight.w700),
+                color: AppConstants.primaryColor,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -801,9 +614,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
     if (confirm == true && mounted) {
       await LocalStorageService.clearSession();
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-      );
+      Navigator.of(
+        context,
+      ).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreen()));
     }
   }
 
@@ -814,57 +627,59 @@ class _ScannerScreenState extends State<ScannerScreen> {
     return PopScope(
       canPop: false,
       child: Scaffold(
-      backgroundColor: AppConstants.backgroundDark,
-      appBar: AppBar(
-        backgroundColor: AppConstants.primaryColor,
-        foregroundColor: Colors.white,
-        automaticallyImplyLeading: false,
-        centerTitle: false,
-        title: Text(
-          'Hi, ${widget.volunteerName}',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-              fontSize: 16, fontWeight: FontWeight.w700),
+        backgroundColor: AppConstants.backgroundDark,
+        appBar: AppBar(
+          backgroundColor: AppConstants.primaryColor,
+          foregroundColor: Colors.white,
+          automaticallyImplyLeading: false,
+          centerTitle: false,
+          title: Text(
+            'Hi, ${widget.volunteerName}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.settings_outlined),
+              tooltip: 'Settings',
+              onPressed: _isProcessing ? null : _openSettings,
+            ),
+            IconButton(
+              icon: const Icon(Icons.logout),
+              tooltip: 'Logout',
+              onPressed: _onLogout,
+            ),
+          ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.swap_horiz),
-            tooltip: 'Change Checkpoint',
-            onPressed: _changeCheckpoint,
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Logout',
-            onPressed: _onLogout,
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) => SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                minHeight: (constraints.maxHeight - 48).clamp(0.0, double.infinity),
-              ),
-              child: IntrinsicHeight(
-                child: Column(
-                  children: [
-                    _buildCheckpointCard(),
-                    const Spacer(),
-                    _buildScanArea(),
-                    const SizedBox(height: 28),
-                    _buildManualCheckIn(),
-                    const Spacer(),
-                  ],
+        body: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) => SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: (constraints.maxHeight - 48).clamp(
+                    0.0,
+                    double.infinity,
+                  ),
+                ),
+                child: IntrinsicHeight(
+                  child: Column(
+                    children: [
+                      _buildCheckpointCard(),
+                      const Spacer(),
+                      _buildScanArea(),
+                      const SizedBox(height: 28),
+                      _buildManualCheckIn(),
+                      const Spacer(),
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
         ),
       ),
-    ),
     );
   }
 
@@ -885,8 +700,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
               color: AppConstants.primaryColor.withValues(alpha: 0.15),
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.location_on_outlined,
-                color: AppConstants.primaryColor, size: 20),
+            child: const Icon(
+              Icons.location_on_outlined,
+              color: AppConstants.primaryColor,
+              size: 20,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -944,14 +762,14 @@ class _ScannerScreenState extends State<ScannerScreen> {
             style: ElevatedButton.styleFrom(
               backgroundColor: AppConstants.primaryColor,
               foregroundColor: Colors.white,
-              disabledBackgroundColor:
-                  AppConstants.primaryColor.withValues(alpha: 0.45),
+              disabledBackgroundColor: AppConstants.primaryColor.withValues(
+                alpha: 0.45,
+              ),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
               ),
               elevation: 6,
-              shadowColor:
-                  AppConstants.primaryColor.withValues(alpha: 0.4),
+              shadowColor: AppConstants.primaryColor.withValues(alpha: 0.4),
             ),
           ),
         ),
@@ -962,8 +780,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Widget _buildManualCheckIn() {
     return TextButton.icon(
       onPressed: _isProcessing ? null : _onManualCheckIn,
-      icon: const Icon(Icons.edit_outlined,
-          size: 16, color: Colors.white54),
+      icon: const Icon(Icons.edit_outlined, size: 16, color: Colors.white54),
       label: const Text(
         'Manual Check-in',
         style: TextStyle(
@@ -1022,8 +839,10 @@ class _ManualCheckInDialogState extends State<_ManualCheckInDialog> {
       ),
       focusedErrorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide:
-            const BorderSide(color: AppConstants.primaryColor, width: 1.5),
+        borderSide: const BorderSide(
+          color: AppConstants.primaryColor,
+          width: 1.5,
+        ),
       ),
     );
   }
@@ -1057,8 +876,11 @@ class _ManualCheckInDialogState extends State<_ManualCheckInDialog> {
                     color: AppConstants.primaryColor.withValues(alpha: 0.15),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.edit_outlined,
-                      color: AppConstants.primaryColor, size: 20),
+                  child: const Icon(
+                    Icons.edit_outlined,
+                    color: AppConstants.primaryColor,
+                    size: 20,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 const Text(
@@ -1079,9 +901,10 @@ class _ManualCheckInDialogState extends State<_ManualCheckInDialog> {
             const Text(
               'Rider ID / Bib No.',
               style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600),
+                color: Colors.white70,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 6),
             TextField(
@@ -1105,7 +928,9 @@ class _ManualCheckInDialogState extends State<_ManualCheckInDialog> {
               Text(
                 _validationError!,
                 style: const TextStyle(
-                    color: AppConstants.primaryColor, fontSize: 12),
+                  color: AppConstants.primaryColor,
+                  fontSize: 12,
+                ),
               ),
             ],
 

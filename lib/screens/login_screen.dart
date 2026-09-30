@@ -4,6 +4,7 @@ import '../constants/app_constants.dart';
 import '../models/checkpoint.dart';
 import '../models/volunteer.dart';
 import '../services/api_service.dart';
+import '../services/rider_service.dart';
 import '../services/local_storage_service.dart';
 import 'scanner_screen.dart';
 
@@ -21,6 +22,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   bool _isLoading = false;
   bool _obscurePin = true;
+  bool _isDownloadingRiders = false;
   String? _errorMessage;
 
   @override
@@ -46,13 +48,23 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (!mounted) return;
 
+      setState(() => _isDownloadingRiders = true);
+      await RiderService.refresh();
+      if (mounted) setState(() => _isDownloadingRiders = false);
+      if (!mounted) return;
+
       // Login success → show checkpoint selection
       await _showCheckpointDialog(volunteer);
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() => _errorMessage = e.message);
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isDownloadingRiders = false;
+        });
+      }
     }
   }
 
@@ -65,9 +77,7 @@ class _LoginScreenState extends State<LoginScreen> {
       context: context,
       barrierDismissible: false,
       builder: (_) => const Center(
-        child: CircularProgressIndicator(
-          color: AppConstants.primaryColor,
-        ),
+        child: CircularProgressIndicator(color: AppConstants.primaryColor),
       ),
     );
 
@@ -224,21 +234,34 @@ class _LoginScreenState extends State<LoginScreen> {
             _buildPhoneField(),
             const SizedBox(height: 16),
             _buildPinField(),
+            if (_isDownloadingRiders) ...[
+              const SizedBox(height: 14),
+              const Text(
+                'Downloading rider list…',
+                style: TextStyle(color: Colors.white70),
+              ),
+            ],
             if (_errorMessage != null) ...[
               const SizedBox(height: 14),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: AppConstants.primaryColor.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
-                      color: AppConstants.primaryColor.withValues(alpha: 0.5)),
+                    color: AppConstants.primaryColor.withValues(alpha: 0.5),
+                  ),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.error_outline,
-                        color: AppConstants.primaryColor, size: 18),
+                    const Icon(
+                      Icons.error_outline,
+                      color: AppConstants.primaryColor,
+                      size: 18,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -297,7 +320,9 @@ class _LoginScreenState extends State<LoginScreen> {
         prefixIcon: Icons.lock_outline,
         suffix: IconButton(
           icon: Icon(
-            _obscurePin ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+            _obscurePin
+                ? Icons.visibility_outlined
+                : Icons.visibility_off_outlined,
             color: Colors.white54,
             size: 20,
           ),
@@ -320,7 +345,9 @@ class _LoginScreenState extends State<LoginScreen> {
         style: ElevatedButton.styleFrom(
           backgroundColor: AppConstants.primaryColor,
           foregroundColor: Colors.white,
-          disabledBackgroundColor: AppConstants.primaryColor.withValues(alpha: 0.5),
+          disabledBackgroundColor: AppConstants.primaryColor.withValues(
+            alpha: 0.5,
+          ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
           ),
@@ -368,8 +395,10 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide:
-            const BorderSide(color: AppConstants.primaryColor, width: 1.5),
+        borderSide: const BorderSide(
+          color: AppConstants.primaryColor,
+          width: 1.5,
+        ),
       ),
       errorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
@@ -443,8 +472,11 @@ class _CheckpointDialogState extends State<_CheckpointDialog> {
                     color: AppConstants.primaryColor.withValues(alpha: 0.15),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.location_on,
-                      color: AppConstants.primaryColor, size: 22),
+                  child: const Icon(
+                    Icons.location_on,
+                    color: AppConstants.primaryColor,
+                    size: 22,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -486,13 +518,16 @@ class _CheckpointDialogState extends State<_CheckpointDialog> {
                   value: _selected,
                   hint: Text(
                     'Choose your checkpoint',
-                    style:
-                        TextStyle(color: Colors.white.withValues(alpha: 0.4)),
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.4),
+                    ),
                   ),
                   isExpanded: true,
                   dropdownColor: const Color(0xFF3A3A3A),
-                  icon: const Icon(Icons.keyboard_arrow_down,
-                      color: Colors.white54),
+                  icon: const Icon(
+                    Icons.keyboard_arrow_down,
+                    color: Colors.white54,
+                  ),
                   items: widget.checkpoints
                       .map(
                         (cp) => DropdownMenuItem(
@@ -516,7 +551,9 @@ class _CheckpointDialogState extends State<_CheckpointDialog> {
               Text(
                 _error!,
                 style: const TextStyle(
-                    color: AppConstants.primaryColor, fontSize: 12),
+                  color: AppConstants.primaryColor,
+                  fontSize: 12,
+                ),
               ),
             ],
             const SizedBox(height: 20),
@@ -527,8 +564,9 @@ class _CheckpointDialogState extends State<_CheckpointDialog> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppConstants.primaryColor,
                   foregroundColor: Colors.white,
-                  disabledBackgroundColor:
-                      AppConstants.primaryColor.withValues(alpha: 0.5),
+                  disabledBackgroundColor: AppConstants.primaryColor.withValues(
+                    alpha: 0.5,
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),

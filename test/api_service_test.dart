@@ -26,6 +26,109 @@ class _LocalClient implements HttpClient {
 }
 
 void main() {
+  for (final scenario in [
+    'html',
+    'empty',
+    '503',
+    'persistent',
+    'invalid-pin',
+    'sign-in',
+  ]) {
+    test(
+      'login handles $scenario response with bounded safe retries',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final clients = List.generate(3, (_) => HttpClient());
+        var clientIndex = 0;
+        final methods = <String>[];
+        var attempts = 0;
+        server.listen((request) async {
+          methods.add(request.method);
+          final raw = await utf8.decoder.bind(request).join();
+          if (request.method == 'POST') {
+            attempts++;
+            expect(jsonDecode(raw)['action'], 'loginVolunteer');
+            request.response.statusCode = 302;
+            request.response.headers.set(
+              HttpHeaders.locationHeader,
+              scenario == 'sign-in'
+                  ? 'https://accounts.google.com/login'
+                  : 'https://script.googleusercontent.com/result',
+            );
+          } else if (scenario == 'invalid-pin') {
+            request.response.write(
+              jsonEncode({'status': 'error', 'message': 'Invalid PIN'}),
+            );
+          } else if (scenario == 'persistent' || attempts == 1) {
+            if (scenario == '503') request.response.statusCode = 503;
+            request.response.write(
+              scenario == 'empty' ? '' : '<html>Unavailable</html>',
+            );
+          } else {
+            request.response.write(
+              jsonEncode({
+                'status': 'success',
+                'volunteer': {
+                  'name': 'Test',
+                  'phone': '123',
+                  'role': 'scanner',
+                },
+              }),
+            );
+          }
+          await request.response.close();
+        });
+        try {
+          await HttpOverrides.runZoned(
+            () async {
+              final login = ApiService.loginVolunteer(phone: '123', pin: '456');
+              if (['persistent', 'invalid-pin', 'sign-in'].contains(scenario)) {
+                await expectLater(
+                  login,
+                  throwsA(
+                    isA<ApiException>().having(
+                      (e) => e.message,
+                      'message',
+                      contains(
+                        scenario == 'persistent'
+                            ? 'unexpected response'
+                            : scenario == 'invalid-pin'
+                            ? 'Invalid PIN'
+                            : 'Google sign-in',
+                      ),
+                    ),
+                  ),
+                );
+              } else {
+                expect((await login).name, 'Test');
+              }
+            },
+            createHttpClient: (_) => _LocalClient(
+              clients[clientIndex++],
+              Uri.parse('http://127.0.0.1:${server.port}/'),
+            ),
+          );
+          final expectedAttempts = scenario == 'persistent'
+              ? 3
+              : ['invalid-pin', 'sign-in'].contains(scenario)
+              ? 1
+              : 2;
+          expect(attempts, expectedAttempts);
+          expect(methods, [
+            for (var i = 0; i < expectedAttempts; i++) ...[
+              'POST',
+              if (scenario != 'sign-in') 'GET',
+            ],
+          ]);
+        } finally {
+          for (final client in clients) {
+            client.close(force: true);
+          }
+          await server.close(force: true);
+        }
+      },
+    );
+  }
   for (final code in [503, 403, 404]) {
     test('read-only retry limit for HTTP $code', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

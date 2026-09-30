@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import '../constants/app_constants.dart';
 import '../models/checkpoint.dart';
+import '../models/rider.dart';
 import '../models/volunteer.dart';
 
 // ---------------------------------------------------------------------------
@@ -36,8 +37,11 @@ class _RetryableApiException extends ApiException {
 class ApiService {
   static final Uri _baseUri = Uri.parse(AppConstants.apiUrl);
 
-  // Only read-only actions use this helper. Each retry starts at the exec URL.
-  static Future<Map<String, dynamic>> _read(Map<String, dynamic> body) async {
+  // Only reads and login use this helper. Repeating login only refreshes
+  // last_login. Each retry starts at the exec URL; scans must not be replayed.
+  static Future<Map<String, dynamic>> _retrySafePost(
+    Map<String, dynamic> body,
+  ) async {
     for (var attempt = 0; ; attempt++) {
       try {
         return await _post(body);
@@ -159,9 +163,10 @@ class ApiService {
       } on FormatException {
         // Login and deployment error pages can return HTML with status 200.
       }
-      throw const ApiException(
-        'The backend did not return JSON. Check the Apps Script deployment '
-        'URL and web app access settings.',
+      throw const _RetryableApiException(
+        'The backend returned an unexpected response. Please try again. '
+        'If this keeps happening, check the Apps Script deployment URL '
+        'and web app access settings.',
       );
     } on ApiException {
       rethrow;
@@ -193,7 +198,7 @@ class ApiService {
     required String phone,
     required String pin,
   }) async {
-    final data = await _post({
+    final data = await _retrySafePost({
       'action': 'loginVolunteer',
       'phone': phone,
       'pin': pin,
@@ -211,11 +216,37 @@ class ApiService {
     throw ApiException(data['message']?.toString() ?? 'Invalid phone or PIN.');
   }
 
+  /// Downloads both master sheets in a single response.
+  static Future<RiderList> getRiders() async {
+    final data = await _retrySafePost({'action': 'getRiders'});
+    if (data['status'] != 'success') {
+      throw ApiException(
+        data['message']?.toString() ?? 'Could not download riders.',
+      );
+    }
+    try {
+      final groups = data['riders'] as Map<String, dynamic>;
+      final riders = <Rider>[];
+      for (final category in ['40', '100']) {
+        for (final raw in groups[category] as List) {
+          final rider = Rider.fromJson(raw as Map<String, dynamic>);
+          if (rider.category != category) throw const FormatException();
+          riders.add(rider);
+        }
+      }
+      return RiderList(riders, DateTime.now());
+    } catch (_) {
+      throw const ApiException(
+        'The rider list is incomplete or invalid. Please contact an organizer.',
+      );
+    }
+  }
+
   // ── getCheckpoints ─────────────────────────────────────────────────────────
   /// Returns active checkpoints from the Checkpoints_Master sheet.
   /// Each entry includes checkpoint_id, checkpoint_name, category.
   static Future<List<Checkpoint>> getCheckpoints() async {
-    final data = await _read({'action': 'getCheckpoints'});
+    final data = await _retrySafePost({'action': 'getCheckpoints'});
 
     if (data['status'] == 'success') {
       final List<dynamic> raw = data['checkpoints'] as List<dynamic>;
@@ -324,7 +355,7 @@ class ApiService {
     required String checkpoint,
     required bool retry,
   }) async {
-    final data = await (retry ? _read : _post)({
+    final data = await (retry ? _retrySafePost : _post)({
       'action': 'checkScanStatus',
       'rider_id': riderId,
       'category': category,
@@ -342,7 +373,10 @@ class ApiService {
   static Future<Map<String, dynamic>> verifyRider({
     required String riderId,
   }) async {
-    final data = await _read({'action': 'verifyRider', 'rider_id': riderId});
+    final data = await _retrySafePost({
+      'action': 'verifyRider',
+      'rider_id': riderId,
+    });
 
     if (data['status'] == 'success') {
       return data['data'] as Map<String, dynamic>;
