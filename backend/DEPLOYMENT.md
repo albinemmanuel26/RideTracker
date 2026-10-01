@@ -1,5 +1,10 @@
 # Deploy local scan history and manual sync
 
+Login now validates volunteer credentials without updating `last_login`. Existing
+timestamp values and the column can remain in the Volunteers sheet; login no
+longer requires that column. Deploy a new Apps Script version for this change
+to take effect. No app rebuild is required for the login-write removal.
+
 1. Back up the Riders_Scan sheet.
 2. Keep the existing seven columns A–G in their current order. Reserve H for
    `entry_id` and I for `scanned_at`. Leave H/I blank or set those exact headers.

@@ -37,8 +37,8 @@ class _RetryableApiException extends ApiException {
 class ApiService {
   static final Uri _baseUri = Uri.parse(AppConstants.apiUrl);
 
-  // Only reads and login use this helper. Repeating login only refreshes
-  // last_login. Each retry starts at the exec URL; scans must not be replayed.
+  // Only read-only actions, including login, use this helper.
+  // Each retry starts at the exec URL; scans must not be replayed.
   static Future<Map<String, dynamic>> _retrySafePost(
     Map<String, dynamic> body,
   ) async {
@@ -196,7 +196,7 @@ class ApiService {
   /// Authenticates a volunteer via the Volunteers sheet.
   /// Actions: loginVolunteer
   /// Checks: phone match, PIN match, is_active == TRUE.
-  /// On success updates last_login in sheet.
+  /// Login reads volunteer details without writing to the sheet.
   /// Returns a [Volunteer] with name, phone, and role from the API response.
   static Future<Volunteer> loginVolunteer({
     required String phone,

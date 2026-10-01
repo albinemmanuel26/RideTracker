@@ -79,7 +79,6 @@ function loginVolunteer(data) {
   const activeIndex = headers.indexOf("is_active");
   const nameIndex = headers.indexOf("name");
   const roleIndex = headers.indexOf("role");
-  const loginIndex = headers.indexOf("last_login");
 
   for (let i = 1; i < rows.length; i++) {
     const sheetPhone = rows[i][phoneIndex].toString().trim();
@@ -95,9 +94,6 @@ function loginVolunteer(data) {
       if (rows[i][pinIndex].toString() !== pin.toString()) {
         return response({ status: "error", message: "Invalid PIN" });
       }
-
-      // ✅ Update last login
-      sheet.getRange(i + 1, loginIndex + 1).setValue(new Date());
 
       // ✅ Return full volunteer details
       return response({
