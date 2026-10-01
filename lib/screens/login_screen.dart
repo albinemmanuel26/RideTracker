@@ -347,13 +347,13 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
       errorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: Colors.red.shade300),
+        borderSide: BorderSide(color: AppConstants.primaryColor),
       ),
       focusedErrorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: Colors.red.shade300, width: 1.5),
+        borderSide: BorderSide(color: AppConstants.primaryColor, width: 1.5),
       ),
-      errorStyle: TextStyle(color: Colors.red.shade300),
+      errorStyle: TextStyle(color: AppConstants.primaryColor),
     );
   }
 }

@@ -109,8 +109,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
         Navigator.of(context).pop();
       }
       if (RiderService.riderDownloadError == null &&
-          LocalStorageService.riderList != null)
+          LocalStorageService.riderList != null) {
         break;
+      }
       final retry = await showDialog<bool>(
         context: context,
         barrierDismissible: false,

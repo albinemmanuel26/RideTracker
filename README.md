@@ -72,3 +72,10 @@ Already failed downloads are retried on that click; successful lists are retaine
 The popup shows live progress and offers Retry failed downloads or Cancel after
 failure. Continue is available when riders are ready and saved checkpoint options
 exist. If no checkpoint was selected, the app returns to selection before scanning.
+
+Current login flow: Start scanning is disabled until the checkpoint download
+succeeds. After selecting a checkpoint, volunteers can enter the scanner while
+riders continue downloading. Rider downloads are shared across screens; navigation
+does not cancel or restart them. QR/manual rider lookup waits with progress for an
+active download, or offers Retry/Cancel on failure. Retry downloads riders only.
+The checkpoint-selection download-status popup is no longer used on Start scanning.

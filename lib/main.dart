@@ -23,8 +23,34 @@ class RideTrackApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.dark(
           primary: AppConstants.primaryColor,
+          onPrimary: AppConstants.onPrimaryColor,
+          primaryContainer: AppConstants.primaryColor,
+          onPrimaryContainer: AppConstants.onPrimaryColor,
+          error: AppConstants.primaryColor,
+          onError: AppConstants.onPrimaryColor,
+          errorContainer: AppConstants.primaryColor,
+          onErrorContainer: AppConstants.onPrimaryColor,
           secondary: AppConstants.secondaryColor,
           surface: AppConstants.surfaceColor,
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            backgroundColor: AppConstants.primaryColor,
+            foregroundColor: AppConstants.onPrimaryColor,
+            disabledForegroundColor: AppConstants.onPrimaryColor,
+          ),
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppConstants.primaryColor,
+            foregroundColor: AppConstants.onPrimaryColor,
+            disabledForegroundColor: AppConstants.onPrimaryColor,
+          ),
+        ),
+        snackBarTheme: const SnackBarThemeData(
+          contentTextStyle: TextStyle(color: Colors.white),
+          actionTextColor: Colors.white,
+          backgroundColor: AppConstants.surfaceColor,
         ),
         scaffoldBackgroundColor: AppConstants.backgroundDark,
         fontFamily: 'Roboto',
@@ -52,4 +78,3 @@ class _AppEntry extends StatelessWidget {
     return const LoginScreen();
   }
 }
-

@@ -12,7 +12,12 @@ class RiderService {
   static Future<String?> _downloadRiderList() async {
     riderDownloadError = null;
     try {
-      final riders = await ApiService.getRiders();
+      final riders = await ApiService.getRiders().timeout(
+        const Duration(seconds: 45),
+        onTimeout: () => throw const ApiException(
+          'Rider download timed out. Check your connection and retry.',
+        ),
+      );
       await LocalStorageService.saveRiderList(riders);
     } catch (e) {
       riderDownloadError = e.toString();
@@ -38,7 +43,12 @@ class RiderService {
 
     Future<void> checkpointsDownload() async {
       try {
-        final checkpoints = await ApiService.getCheckpoints();
+        final checkpoints = await ApiService.getCheckpoints().timeout(
+          const Duration(seconds: 45),
+          onTimeout: () => throw const ApiException(
+            'Checkpoint download timed out. Check your connection and retry.',
+          ),
+        );
         if (checkpoints.isEmpty ||
             checkpoints.any(
               (c) =>

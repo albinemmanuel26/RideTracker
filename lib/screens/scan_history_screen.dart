@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../constants/app_constants.dart';
 import '../services/scan_history_service.dart';
 
 class ScanHistoryScreen extends StatefulWidget {
@@ -11,6 +12,8 @@ class _ScanHistoryScreenState extends State<ScanHistoryScreen> {
   List<Map<String, dynamic>> _entries = [];
   bool _busy = true;
   String? _message;
+  bool _isInvalid(Map<String, dynamic> entry) =>
+      entry['error']?.toString().trim().toLowerCase() == 'invalid checkpoint';
   @override
   void initState() {
     super.initState();
@@ -65,8 +68,26 @@ class _ScanHistoryScreenState extends State<ScanHistoryScreen> {
                   'All check-ins saved on this device, including previous sessions. Sync compares them with the backend and uploads missing entries.',
                 ),
                 const SizedBox(height: 8),
-                Text(
-                  '${_entries.length} entries • ${_entries.where((e) => e['confirmed'] != true).length} unconfirmed',
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(text: 'Total ${_entries.length} entries, '),
+                      TextSpan(
+                        text:
+                            '${_entries.where((e) => e['confirmed'] != true && !_isInvalid(e)).length} unconfirmed',
+                        style: const TextStyle(
+                          color: AppConstants.secondaryColor,
+                        ),
+                      ),
+                      const TextSpan(text: ', '),
+                      TextSpan(
+                        text: '${_entries.where(_isInvalid).length} invalid',
+                        style: const TextStyle(
+                          color: AppConstants.primaryColor,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 8),
                 FilledButton.icon(
@@ -84,10 +105,18 @@ class _ScanHistoryScreenState extends State<ScanHistoryScreen> {
               itemCount: _entries.length,
               itemBuilder: (context, index) {
                 final e = _entries[index];
+                final invalidCheckpoint = _isInvalid(e);
+                final entryColor = invalidCheckpoint
+                    ? AppConstants.primaryColor
+                    : e['confirmed'] != true
+                    ? AppConstants.secondaryColor
+                    : null;
                 final date = DateTime.parse(
                   e['scanned_at'] as String,
                 ).toLocal();
                 return ListTile(
+                  textColor: entryColor,
+                  iconColor: entryColor,
                   leading: Icon(
                     e['confirmed'] == true
                         ? Icons.cloud_done

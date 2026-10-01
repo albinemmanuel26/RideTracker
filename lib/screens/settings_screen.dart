@@ -18,8 +18,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _checkpointCategory = LocalStorageService.checkpointCategory;
   bool _isProcessing = false;
   String? _error;
+  String _refreshStatus = '';
+  bool _awaitingRetry = false;
 
   Future<void> _refresh() async {
+    if (_isProcessing || _awaitingRetry) return;
     setState(() {
       _isProcessing = true;
       _error = null;
@@ -27,7 +30,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       while (mounted) {
         try {
-          final warning = await RiderService.refresh();
+          setState(() {
+            _isProcessing = true;
+            _refreshStatus = 'Downloading riders and checkpoints…';
+          });
+          var ridersDone = false;
+          var checkpointsDone = false;
+          void updateProgress() {
+            if (!mounted) return;
+            setState(
+              () => _refreshStatus = ridersDone && checkpointsDone
+                  ? 'Downloads finished.'
+                  : ridersDone
+                  ? 'Riders finished. Downloading checkpoints…'
+                  : checkpointsDone
+                  ? 'Checkpoints finished. Downloading riders…'
+                  : 'Downloading riders and checkpoints…',
+            );
+          }
+
+          final warning = await RiderService.refresh(
+            onRidersDone: (_) {
+              ridersDone = true;
+              updateProgress();
+            },
+            onCheckpointsDone: (_) {
+              checkpointsDone = true;
+              updateProgress();
+            },
+          );
           if (!mounted) return;
           setState(() => _error = warning);
           ScaffoldMessenger.of(context).showSnackBar(
@@ -38,7 +69,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           break;
         } on ApiException catch (e) {
           if (!mounted) return;
-          setState(() => _error = e.message);
+          setState(() {
+            _error = e.message;
+            _isProcessing = false;
+            _awaitingRetry = true;
+          });
           final retry = await showDialog<bool>(
             context: context,
             barrierDismissible: false,
@@ -57,11 +92,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
           );
+          _awaitingRetry = false;
           if (retry != true) break;
         }
       }
     } finally {
-      if (mounted) setState(() => _isProcessing = false);
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _awaitingRetry = false;
+        });
+      }
     }
   }
 
@@ -136,7 +177,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         : const Icon(Icons.refresh),
                     label: Text(
                       _isProcessing
-                          ? 'Updating riders and checkpoints…'
+                          ? _refreshStatus
                           : 'Refresh riders and checkpoints',
                     ),
                   ),

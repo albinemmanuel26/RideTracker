@@ -83,12 +83,29 @@ void main() {
         );
         await request.response.close();
       });
-      Future<String?> refresh({bool riders = true, bool checkpoints = true}) async {
+      Future<String?> refresh({
+        bool riders = true,
+        bool checkpoints = true,
+      }) async {
         final clients = List.generate(3, (_) => HttpClient());
         var index = 0;
         try {
           return await HttpOverrides.runZoned(
-            () => RiderService.refresh(downloadRiders: riders, downloadCheckpoints: checkpoints),
+            () {
+              final result = RiderService.refresh(
+                downloadRiders: riders,
+                downloadCheckpoints: checkpoints,
+              );
+              if (riders) {
+                final pending = RiderService.riderDownload;
+                expect(pending, isNotNull);
+                expect(
+                  identical(RiderService.downloadRiderList(), pending),
+                  isTrue,
+                );
+              }
+              return result;
+            },
             createHttpClient: (_) => _Client(
               clients[index++],
               Uri.parse('http://127.0.0.1:${server.port}/'),
