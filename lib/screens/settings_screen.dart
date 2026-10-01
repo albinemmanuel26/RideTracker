@@ -195,6 +195,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onTap: _isProcessing ? null : _changeCheckpoint,
             ),
           ),
+          const Padding(
+            padding: EdgeInsets.only(top: 40, bottom: 12),
+            child: Text(
+              'Crafted by Albin Emmanuel',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Color(0x73D3D3D3),
+                fontSize: 12,
+              ),
+            ),
+          ),
         ],
       ),
     );

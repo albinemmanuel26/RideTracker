@@ -13,7 +13,19 @@
 Each new app check-in is committed to the device database before sending. Normal
 uploads include a random 128-bit entry ID and the original device scan time in UTC.
 The server appends these in H/I, retains upload time in the existing columns, and
-acknowledges the entry ID. Normal uploads still skip scan-history checking.
+acknowledges the entry ID. Normal uploads check column H under the same script
+lock as sync before appending. Retrying a saved entry returns success and its ID
+without adding a row. Requests from older clients without IDs retain their
+existing append behavior.
+
+The updated Flutter app confirms the local save immediately and uploads pending
+entries through `syncScans` while foregrounded. It retries failed requests with
+increasing delays (5–60 seconds), checks for pending work every 30 seconds when
+idle, and resumes on reopening the app. The scanner displays pending and
+needs-attention counts with a link to history. Server-rejected entries remain
+saved and can be retried using manual sync after their cause is resolved.
+Install a new app build to enable this behavior. Uploads are not guaranteed while
+the app is backgrounded or closed; saved pending entries survive restarts.
 
 Settings → Scan history & sync → Sync now reconciles all entries on this device,
 including previously confirmed ones, in batches of 50. The new syncScans action
@@ -31,11 +43,11 @@ It is not backed up remotely until uploaded; clearing app storage or uninstallin
 can delete unuploaded history. Entries recorded before this app update are not
 reconstructed. Existing server rows without IDs remain untouched.
 
-Because normal uploads do not check IDs, a late original upload can append after
-sync inserts the same entry. Prefer syncing after scanning settles. Reports can
-remove such duplicates by entry_id; unique checkpoint-arrival reports should still
-group by rider/category/checkpoint. Guaranteed exactly-once writes would require
-ID checks on the normal upload path too.
+Normal uploads and sync can safely submit the same entry in either order: the
+ID check and append are serialized under one lock. Existing duplicate rows are
+not removed. Different entry IDs remain separate scans, even for the same rider
+and checkpoint. This backend-only retry-safety update requires deploying a new
+Apps Script version; it does not require rebuilding an already compatible app.
 
 Verification: submit a test scan offline, restart, then sync online. The entry
 should appear with its original scan time. Sync again: it should not add another

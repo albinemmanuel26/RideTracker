@@ -9,6 +9,7 @@ import '../services/local_storage_service.dart';
 import 'login_screen.dart';
 import 'qr_scanner_page.dart';
 import 'settings_screen.dart';
+import 'scan_history_screen.dart';
 
 class ScannerScreen extends StatefulWidget {
   final String checkpointName;
@@ -48,12 +49,22 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
   Future<void> _onScanQR() async {
     if (_isProcessing) return;
-    final result = await Navigator.push<String>(
-      context,
-      MaterialPageRoute(builder: (_) => const QRScannerPage()),
-    );
+    setState(() => _isProcessing = true);
+    final Object? result;
+    try {
+      result = await Navigator.push<Object>(
+        context,
+        MaterialPageRoute(builder: (_) => const QRScannerPage()),
+      );
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
     if (!mounted || result == null) return;
-    await _processQRResult(result);
+    if (result == QRScannerAction.manualEntry) {
+      await _onManualCheckIn();
+    } else if (result is String) {
+      await _processQRResult(result);
+    }
   }
 
   // ── Manual Check-in ────────────────────────────────────────────────────────
@@ -108,8 +119,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
         if (!mounted) return;
         Navigator.of(context).pop();
       }
-      if (RiderService.riderDownloadError == null &&
-          LocalStorageService.riderList != null) {
+      if (LocalStorageService.riderList != null) {
         break;
       }
       final retry = await showDialog<bool>(
@@ -326,6 +336,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
     final displayName = (riderName != null && riderName.isNotEmpty)
         ? riderName
         : null;
+    final savedList = LocalStorageService.riderList;
+    final usingSavedList =
+        RiderService.riderDownloadError != null && savedList != null;
 
     return showDialog<bool>(
       context: context,
@@ -347,6 +360,17 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   letterSpacing: 1,
                 ),
               ),
+              if (usingSavedList) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Refresh failed. Using rider list downloaded '
+                  '${MaterialLocalizations.of(context).formatMediumDate(savedList.updatedAt.toLocal())} '
+                  '${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(savedList.updatedAt.toLocal()))}. '
+                  'Recent rider changes may be missing. Refresh in Settings when connected.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: AppConstants.secondaryColor),
+                ),
+              ],
               const SizedBox(height: 16),
               // Avatar
               Container(
@@ -490,7 +514,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
     String? uploadError;
     bool isDuplicate = false;
-    Map<String, dynamic>? scanData;
     Map<String, dynamic>? entry;
     try {
       entry = await ScanHistoryService.record(
@@ -501,8 +524,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
         checkpoint: _checkpointName,
         scannedBy: widget.volunteerPhone,
       );
-      await ScanHistoryService.submit(entry);
-      scanData = {'rider_name': entry['rider_name']};
     } on LocalDuplicateScanException catch (e) {
       isDuplicate = true;
       uploadError = e.toString();
@@ -524,10 +545,13 @@ class _ScannerScreenState extends State<ScannerScreen> {
         savedLocally: entry != null,
       );
     } else {
-      final riderName = scanData?['rider_name']?.toString() ?? 'Rider';
+      final riderName = entry?['rider_name']?.toString() ?? 'Rider';
       await _showResultDialog(
         success: true,
-        message: '$riderName scanned successfully\nat $_checkpointName!',
+        savedLocally: true,
+        message:
+            '$riderName saved on this device at $_checkpointName. '
+            'Upload queued automatically while the app is open. You can scan the next rider.',
       );
     }
   }
@@ -736,6 +760,29 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   child: Column(
                     children: [
                       _buildCheckpointCard(),
+                      ValueListenableBuilder<ScanQueueStatus>(
+                        valueListenable: ScanHistoryService.queueStatus,
+                        builder: (context, status, _) => TextButton.icon(
+                          onPressed: _isProcessing
+                              ? null
+                              : () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const ScanHistoryScreen(),
+                                  ),
+                                ),
+                          icon: Icon(
+                            status.uploading
+                                ? Icons.cloud_upload_outlined
+                                : Icons.cloud_outlined,
+                          ),
+                          label: Text(
+                            '${status.pending} pending · ${status.rejected} need attention'
+                            '${status.uploading ? " · Uploading" : ""}'
+                            '${status.error != null ? "\nUploads delayed. Open history for details." : ""}',
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
                       const Spacer(),
                       _buildScanArea(),
                       const SizedBox(height: 28),

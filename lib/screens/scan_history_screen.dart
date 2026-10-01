@@ -13,11 +13,23 @@ class _ScanHistoryScreenState extends State<ScanHistoryScreen> {
   bool _busy = true;
   String? _message;
   bool _isInvalid(Map<String, dynamic> entry) =>
+      entry['rejected'] == true ||
       entry['error']?.toString().trim().toLowerCase() == 'invalid checkpoint';
   @override
   void initState() {
     super.initState();
+    ScanHistoryService.queueStatus.addListener(_queueChanged);
     _load();
+  }
+
+  void _queueChanged() {
+    if (!_busy) _load();
+  }
+
+  @override
+  void dispose() {
+    ScanHistoryService.queueStatus.removeListener(_queueChanged);
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -81,7 +93,8 @@ class _ScanHistoryScreenState extends State<ScanHistoryScreen> {
                       ),
                       const TextSpan(text: ', '),
                       TextSpan(
-                        text: '${_entries.where(_isInvalid).length} invalid',
+                        text:
+                            '${_entries.where(_isInvalid).length} need attention',
                         style: const TextStyle(
                           color: AppConstants.primaryColor,
                         ),
@@ -97,6 +110,14 @@ class _ScanHistoryScreenState extends State<ScanHistoryScreen> {
                 ),
                 if (_busy) const LinearProgressIndicator(),
                 if (_message != null) Text(_message!),
+                ValueListenableBuilder<ScanQueueStatus>(
+                  valueListenable: ScanHistoryService.queueStatus,
+                  builder: (_, status, _) => status.error == null
+                      ? const SizedBox.shrink()
+                      : Text(
+                          'Upload status: ${status.error}. Saved entries are retained.',
+                        ),
+                ),
               ],
             ),
           ),

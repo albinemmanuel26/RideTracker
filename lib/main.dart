@@ -4,6 +4,7 @@ import 'constants/app_constants.dart';
 import 'screens/login_screen.dart';
 import 'screens/scanner_screen.dart';
 import 'services/local_storage_service.dart';
+import 'services/scan_history_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -12,8 +13,37 @@ Future<void> main() async {
   runApp(const RideTrackApp());
 }
 
-class RideTrackApp extends StatelessWidget {
+class RideTrackApp extends StatefulWidget {
   const RideTrackApp({super.key});
+
+  @override
+  State<RideTrackApp> createState() => _RideTrackAppState();
+}
+
+class _RideTrackAppState extends State<RideTrackApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    ScanHistoryService.startAutomaticSync();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      ScanHistoryService.startAutomaticSync();
+    } else {
+      ScanHistoryService.stopAutomaticSync();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    ScanHistoryService.stopAutomaticSync();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

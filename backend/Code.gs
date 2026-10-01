@@ -201,7 +201,8 @@ function scanCheckpoint(data) {
   if (entryError) return response({status: "error", message: entryError});
   const prepared = prepareScan(data);
   if (!prepared.row) return response(prepared);
-  // Serialize only the append; repeated rider/checkpoint submissions are allowed.
+  // Check the ID and append under the same lock used by syncScans.
+  // Different entry IDs (and legacy requests without IDs) remain separate scans.
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) {
     return response({
@@ -212,7 +213,17 @@ function scanCheckpoint(data) {
 
   try {
     const sheet = getSheet(SHEETS.scans);
-    if (data.entry_id) ensureEntryColumns(sheet);
+    if (data.entry_id) {
+      ensureEntryColumns(sheet);
+      if (existingEntryIds(sheet).has(data.entry_id)) {
+        return response({
+          status: "success",
+          message: "Scan already saved",
+          entry_id: data.entry_id,
+          data: prepared.data
+        });
+      }
+    }
     sheet.appendRow(prepared.row);
 
     SpreadsheetApp.flush();
@@ -448,6 +459,14 @@ function validateEntry(entry, required) {
   return null;
 }
 
+// Call only while holding the script lock so upload and sync see prior writes.
+function existingEntryIds(sheet) {
+  const lastRow = sheet.getLastRow();
+  return new Set(lastRow > 1
+    ? sheet.getRange(2, 8, lastRow - 1, 1).getValues().map(row => String(row[0]))
+    : []);
+}
+
 function syncScans(data) {
   if (!Array.isArray(data.entries) || data.entries.length > 50) return response({status: "error", message: "Sync accepts up to 50 entries"});
   const errors = {};
@@ -462,8 +481,7 @@ function syncScans(data) {
   try {
     const sheet = getSheet(SHEETS.scans);
     ensureEntryColumns(sheet);
-    const lastRow = sheet.getLastRow();
-    const existing = new Set(lastRow > 1 ? sheet.getRange(2, 8, lastRow - 1, 1).getValues().map(row => String(row[0])) : []);
+    const existing = existingEntryIds(sheet);
     const confirmed = [];
     for (const {entry, prepared} of entries) {
       if (existing.has(entry.entry_id)) { confirmed.push(entry.entry_id); continue; }
